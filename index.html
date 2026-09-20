@@ -313,7 +313,13 @@
         },
         (err) => {
           statusEl.style.display = 'none';
-          alert('Could not get your location automatically. Please enter your address below instead.');
+          alert('Could not get your location automatically (it timed out or was blocked). Please enter your address below instead.');
+        },
+        {
+          // Without a timeout, some phones/browsers just hang here forever
+          // if the location permission prompt is never answered.
+          timeout: 12000,
+          maximumAge: 0
         }
       );
     });
