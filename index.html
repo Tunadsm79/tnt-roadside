@@ -124,7 +124,7 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    input[type="text"] {
+    input[type="text"], input[type="number"] {
       width: 100%;
       padding: 14px;
       border-radius: 10px;
@@ -211,6 +211,14 @@
         <div class="sub">Get back into your vehicle fast</div>
       </div>
     </button>
+
+    <button class="service-btn" data-service="fuel_delivery" data-label="Fuel Delivery">
+      <div class="icon">&#9981;</div>
+      <div>
+        <div class="label">Fuel Delivery</div>
+        <div class="sub">Out of gas? We'll bring enough to get you moving</div>
+      </div>
+    </button>
   </main>
 
   <!-- Screen 2: get location -->
@@ -219,6 +227,11 @@
     <div class="card">
       <h2 id="location-heading">Where are you?</h2>
       <p>We need your location to find the nearest tech and give you an accurate ETA.</p>
+
+      <div id="tire-count-row" style="display:none; margin: 12px 0 -4px;">
+        <label for="tire-count" style="font-size:13px; color:#cbd5e1;">How many tires?</label><br>
+        <input type="number" id="tire-count" min="1" max="6" value="1" style="width:80px;">
+      </div>
 
       <div class="status-row" id="geo-status" style="display:none;">
         <div class="spinner"></div>
@@ -239,7 +252,8 @@
       <h2>Got it!</h2>
       <p id="confirm-summary"></p>
       <div class="eta-box" id="eta-result"></div>
-      <p style="margin-top:16px;">Next up: we'll show your price and connect you with a nearby tech. That part's coming very soon &mdash; thanks for testing TNT Roadside!</p>
+      <div class="eta-box" id="price-result"></div>
+      <p style="margin-top:16px;">Next up: we'll connect you with a nearby tech and handle payment. That part's coming very soon &mdash; thanks for testing TNT Roadside!</p>
       <button class="btn secondary" id="start-over-btn" style="margin-top: 20px;">Start Over</button>
     </div>
   </main>
@@ -253,11 +267,33 @@
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZEELZJOoritTGoNx44ajUfsYdUNa8vAM&callback=initMaps&loading=async" async defer></script>
 
   <script>
-    // TEMPORARY placeholder: a fixed point in Gulfport, MS standing in for
-    // "the technician's current location" until step 8 (live tech GPS
-    // tracking) is built. Swap this for a real Supabase-fetched location
-    // once a technician can update their position.
-    const TECH_BASE_LOCATION = { lat: 30.3674, lng: -89.0928 };
+    // Real starting point: Bayberry RV Park, where Demian is based.
+    // TEMPORARY: standing in for "the technician's current location" until
+    // step 8 (live tech GPS tracking) is built and a real technician
+    // location can be pulled from Supabase instead.
+    const TECH_BASE_LOCATION = "17971 16th St, Gulfport, MS 39503";
+
+    // How far TNT will travel for a job, measured as DRIVING distance from
+    // TECH_BASE_LOCATION (not straight-line radius).
+    const SERVICE_RADIUS_MILES = 12;
+
+    // Flat per-service prices. Flat tire is the first tire; additional
+    // tires add $10 each (handled in calculatePrice below). Fuel delivery
+    // is the callout fee only -- actual fuel cost isn't captured here.
+    const SERVICE_PRICES = {
+      dead_battery: 45,
+      lockout: 65,
+      flat_tire: 65,
+      fuel_delivery: 55
+    };
+
+    // After-hours window: 7pm-7am, every day. During this window the flat
+    // prices above don't apply -- it's $125/hr per car instead.
+    const AFTER_HOURS_RATE = 125;
+    function isAfterHours() {
+      const hour = new Date().getHours();
+      return hour >= 19 || hour < 7;
+    }
 
     let distanceService = null;
     function initMaps() {
@@ -284,6 +320,8 @@
         selectedService = { id: btn.dataset.service, label: btn.dataset.label };
         document.getElementById('location-heading').textContent =
           `Where are you? (${selectedService.label})`;
+        document.getElementById('tire-count-row').style.display =
+          selectedService.id === 'flat_tire' ? 'block' : 'none';
         showScreen('location');
       });
     });
@@ -334,16 +372,25 @@
     });
 
     function finishLocationStep(locationSummary, destination) {
+      if (selectedService.id === 'flat_tire') {
+        selectedService.tireCount =
+          parseInt(document.getElementById('tire-count').value, 10) || 1;
+      }
+      const tireNote = selectedService.id === 'flat_tire'
+        ? ` (${selectedService.tireCount} tire${selectedService.tireCount > 1 ? 's' : ''})`
+        : '';
       document.getElementById('confirm-summary').textContent =
-        `Service: ${selectedService.label}. ${locationSummary}.`;
+        `Service: ${selectedService.label}${tireNote}. ${locationSummary}.`;
       showScreen('confirm');
       calculateEta(destination);
     }
 
     function calculateEta(destination) {
       const etaEl = document.getElementById('eta-result');
+      const priceEl = document.getElementById('price-result');
       etaEl.style.display = 'block';
       etaEl.textContent = 'Calculating your ETA\u2026';
+      priceEl.style.display = 'none';
 
       if (!distanceService) {
         etaEl.textContent = "Couldn't load ETA right now \u2014 we can still send a tech your way.";
@@ -365,9 +412,55 @@
           etaEl.textContent = "Couldn't calculate an ETA for that location \u2014 we can still send a tech your way.";
           return;
         }
+
+        const distanceMiles = result.distance.value / 1609.34;
+
+        if (distanceMiles > SERVICE_RADIUS_MILES) {
+          etaEl.innerHTML =
+            `<strong>Sorry \u2014 that's outside our service area.</strong><br>` +
+            `We currently serve within ${SERVICE_RADIUS_MILES} miles of Gulfport, MS ` +
+            `(this location is about ${distanceMiles.toFixed(1)} mi away by road).`;
+          return;
+        }
+
         etaEl.innerHTML =
           `<strong>Estimated arrival: ${result.duration.text}</strong><br>${result.distance.text} away`;
+
+        showPrice();
       });
+    }
+
+    function showPrice() {
+      const priceEl = document.getElementById('price-result');
+      priceEl.style.display = 'block';
+
+      if (isAfterHours()) {
+        priceEl.innerHTML =
+          `<strong>After-hours rate: $${AFTER_HOURS_RATE}/hr per car</strong><br>` +
+          `Calls between 7pm\u20137am are billed hourly instead of the standard flat rate.`;
+        return;
+      }
+
+      const serviceId = selectedService.id;
+
+      if (serviceId === 'flat_tire') {
+        const count = selectedService.tireCount || 1;
+        const extra = Math.max(0, count - 1);
+        const total = SERVICE_PRICES.flat_tire + extra * 10;
+        priceEl.innerHTML = extra > 0
+          ? `<strong>Price: $${total}</strong><br>$${SERVICE_PRICES.flat_tire} first tire + $10 \u00d7 ${extra} additional`
+          : `<strong>Price: $${total}</strong>`;
+        return;
+      }
+
+      if (serviceId === 'fuel_delivery') {
+        priceEl.innerHTML =
+          `<strong>Price: $${SERVICE_PRICES.fuel_delivery} + cost of fuel</strong><br>` +
+          `Fuel is charged at cost, added to the $${SERVICE_PRICES.fuel_delivery} delivery fee.`;
+        return;
+      }
+
+      priceEl.innerHTML = `<strong>Price: $${SERVICE_PRICES[serviceId]}</strong>`;
     }
 
     document.getElementById('start-over-btn').addEventListener('click', () => {
@@ -376,6 +469,10 @@
       document.getElementById('manual-address').value = '';
       document.getElementById('eta-result').style.display = 'none';
       document.getElementById('eta-result').textContent = '';
+      document.getElementById('price-result').style.display = 'none';
+      document.getElementById('price-result').textContent = '';
+      document.getElementById('tire-count-row').style.display = 'none';
+      document.getElementById('tire-count').value = '1';
       showScreen('services');
     });
   </script>
