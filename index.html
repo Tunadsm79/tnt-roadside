@@ -273,6 +273,18 @@
 
   <!-- Loads Google's map code so we can calculate driving distance/ETA.
        This key is restricted (in Google Cloud) to only run on tnt-roadside.vercel.app -->
+  <script>
+    // Defined before the Maps script tag on purpose: Google's script calls
+    // this the moment it finishes loading (it's async), and adding the
+    // Supabase script below delayed our old main script just enough that
+    // Maps sometimes won the race and called initMaps before it existed
+    // ("initMaps is not a function"). Declaring it first, in its own tiny
+    // script tag, means it always exists in time no matter the load order.
+    let distanceService = null;
+    function initMaps() {
+      distanceService = new google.maps.DistanceMatrixService();
+    }
+  </script>
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZEELZJOoritTGoNx44ajUfsYdUNa8vAM&callback=initMaps&loading=async" async defer></script>
   <!-- Supabase client library -- used to write each dispatch request to the database. -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -312,11 +324,6 @@
     function isAfterHours() {
       const hour = new Date().getHours();
       return hour >= 19 || hour < 7;
-    }
-
-    let distanceService = null;
-    function initMaps() {
-      distanceService = new google.maps.DistanceMatrixService();
     }
 
     // Tracks the current job's computed details so Confirm Dispatch can
