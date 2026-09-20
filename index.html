@@ -31,13 +31,15 @@
       color: #94a3b8;
       font-size: 15px;
     }
-    .services {
+    .screen {
       width: 100%;
       max-width: 420px;
-      display: flex;
+      display: none;
       flex-direction: column;
       gap: 16px;
     }
+    .screen.active { display: flex; }
+
     .service-btn {
       display: flex;
       align-items: center;
@@ -50,10 +52,16 @@
       color: #f8fafc;
       cursor: pointer;
       transition: border-color 0.15s ease, transform 0.1s ease;
+      font: inherit;
+      width: 100%;
     }
     .service-btn:hover {
       border-color: #f97316;
       transform: translateY(-1px);
+    }
+    .service-btn.selected {
+      border-color: #f97316;
+      background: #27221a;
     }
     .service-btn .icon {
       font-size: 28px;
@@ -69,6 +77,89 @@
       color: #94a3b8;
       margin-top: 2px;
     }
+
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 24px;
+    }
+    .card h2 {
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+    .card p {
+      color: #94a3b8;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 16px 0;
+      font-size: 14px;
+      color: #cbd5e1;
+    }
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #475569;
+      border-top-color: #f97316;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    input[type="text"] {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 15px;
+      margin-top: 12px;
+    }
+    input[type="text"]::placeholder { color: #64748b; }
+
+    .btn {
+      display: inline-block;
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: none;
+      background: #f97316;
+      color: #0f172a;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    .btn:disabled {
+      background: #475569;
+      color: #94a3b8;
+      cursor: not-allowed;
+    }
+    .btn.secondary {
+      background: transparent;
+      border: 1px solid #334155;
+      color: #cbd5e1;
+    }
+
+    .back-link {
+      color: #94a3b8;
+      font-size: 14px;
+      text-decoration: none;
+      margin-bottom: 4px;
+      cursor: pointer;
+      background: none;
+      border: none;
+      text-align: left;
+      font-family: inherit;
+    }
+
     footer {
       margin-top: 48px;
       color: #64748b;
@@ -83,8 +174,9 @@
     <p>Mobile roadside help &mdash; Gulfport &amp; Biloxi, MS</p>
   </header>
 
-  <main class="services">
-    <button class="service-btn" data-service="flat_tire">
+  <!-- Screen 1: choose a service -->
+  <main class="screen active" id="screen-services">
+    <button class="service-btn" data-service="flat_tire" data-label="Flat Tire">
       <div class="icon">&#128664;</div>
       <div>
         <div class="label">Flat Tire</div>
@@ -92,7 +184,7 @@
       </div>
     </button>
 
-    <button class="service-btn" data-service="dead_battery">
+    <button class="service-btn" data-service="dead_battery" data-label="Dead Battery">
       <div class="icon">&#128267;</div>
       <div>
         <div class="label">Dead Battery</div>
@@ -100,7 +192,7 @@
       </div>
     </button>
 
-    <button class="service-btn" data-service="lockout">
+    <button class="service-btn" data-service="lockout" data-label="Locked Out">
       <div class="icon">&#128273;</div>
       <div>
         <div class="label">Locked Out</div>
@@ -109,8 +201,113 @@
     </button>
   </main>
 
+  <!-- Screen 2: get location -->
+  <main class="screen" id="screen-location">
+    <button class="back-link" id="back-to-services">&larr; Back</button>
+    <div class="card">
+      <h2 id="location-heading">Where are you?</h2>
+      <p>We need your location to find the nearest tech and give you an accurate ETA.</p>
+
+      <div class="status-row" id="geo-status" style="display:none;">
+        <div class="spinner"></div>
+        <span>Finding your location&hellip;</span>
+      </div>
+
+      <button class="btn" id="use-location-btn">Use My Current Location</button>
+
+      <p style="margin-top:20px; font-size:13px;">Or enter your location manually:</p>
+      <input type="text" id="manual-address" placeholder="Street address or nearest cross streets">
+      <button class="btn secondary" id="manual-continue-btn">Continue with This Address</button>
+    </div>
+  </main>
+
+  <!-- Screen 3: confirmation placeholder -->
+  <main class="screen" id="screen-confirm">
+    <div class="card">
+      <h2>Got it!</h2>
+      <p id="confirm-summary"></p>
+      <p style="margin-top:16px;">Next up: we'll calculate your price and ETA and connect you with a nearby tech. That part's coming very soon &mdash; thanks for testing TNT Roadside!</p>
+      <button class="btn secondary" id="start-over-btn" style="margin-top: 20px;">Start Over</button>
+    </div>
+  </main>
+
   <footer>
     &copy; 2026 TNT Roadside. Available 7 days a week.
   </footer>
+
+  <script>
+    const screens = {
+      services: document.getElementById('screen-services'),
+      location: document.getElementById('screen-location'),
+      confirm: document.getElementById('screen-confirm'),
+    };
+
+    function showScreen(name) {
+      Object.values(screens).forEach(s => s.classList.remove('active'));
+      screens[name].classList.add('active');
+    }
+
+    let selectedService = null;
+
+    document.querySelectorAll('.service-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.service-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedService = { id: btn.dataset.service, label: btn.dataset.label };
+        document.getElementById('location-heading').textContent =
+          `Where are you? (${selectedService.label})`;
+        showScreen('location');
+      });
+    });
+
+    document.getElementById('back-to-services').addEventListener('click', () => {
+      showScreen('services');
+    });
+
+    document.getElementById('use-location-btn').addEventListener('click', () => {
+      const statusEl = document.getElementById('geo-status');
+      statusEl.style.display = 'flex';
+
+      if (!navigator.geolocation) {
+        statusEl.style.display = 'none';
+        alert('Location services are not available in this browser. Please enter your address manually below.');
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          statusEl.style.display = 'none';
+          const { latitude, longitude } = pos.coords;
+          finishLocationStep(`GPS location captured (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`);
+        },
+        (err) => {
+          statusEl.style.display = 'none';
+          alert('Could not get your location automatically. Please enter your address below instead.');
+        }
+      );
+    });
+
+    document.getElementById('manual-continue-btn').addEventListener('click', () => {
+      const address = document.getElementById('manual-address').value.trim();
+      if (!address) {
+        alert('Please enter an address or cross streets first.');
+        return;
+      }
+      finishLocationStep(`Address entered: "${address}"`);
+    });
+
+    function finishLocationStep(locationSummary) {
+      document.getElementById('confirm-summary').textContent =
+        `Service: ${selectedService.label}. ${locationSummary}.`;
+      showScreen('confirm');
+    }
+
+    document.getElementById('start-over-btn').addEventListener('click', () => {
+      selectedService = null;
+      document.querySelectorAll('.service-btn').forEach(b => b.classList.remove('selected'));
+      document.getElementById('manual-address').value = '';
+      showScreen('services');
+    });
+  </script>
 </body>
 </html>
