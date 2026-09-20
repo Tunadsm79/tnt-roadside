@@ -101,6 +101,18 @@
       font-size: 14px;
       color: #cbd5e1;
     }
+    .eta-box {
+      display: none;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin: 16px 0;
+      font-size: 14px;
+      color: #cbd5e1;
+    }
+    .eta-box strong { color: #f8fafc; }
+
     .spinner {
       width: 16px;
       height: 16px;
@@ -226,7 +238,8 @@
     <div class="card">
       <h2>Got it!</h2>
       <p id="confirm-summary"></p>
-      <p style="margin-top:16px;">Next up: we'll calculate your price and ETA and connect you with a nearby tech. That part's coming very soon &mdash; thanks for testing TNT Roadside!</p>
+      <div class="eta-box" id="eta-result"></div>
+      <p style="margin-top:16px;">Next up: we'll show your price and connect you with a nearby tech. That part's coming very soon &mdash; thanks for testing TNT Roadside!</p>
       <button class="btn secondary" id="start-over-btn" style="margin-top: 20px;">Start Over</button>
     </div>
   </main>
@@ -235,7 +248,22 @@
     &copy; 2026 TNT Roadside. Available 7 days a week.
   </footer>
 
+  <!-- Loads Google's map code so we can calculate driving distance/ETA.
+       This key is restricted (in Google Cloud) to only run on tnt-roadside.vercel.app -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZEELZJOoritTGoNx44ajUfsYdUNa8vAM&callback=initMaps&loading=async" async defer></script>
+
   <script>
+    // TEMPORARY placeholder: a fixed point in Gulfport, MS standing in for
+    // "the technician's current location" until step 8 (live tech GPS
+    // tracking) is built. Swap this for a real Supabase-fetched location
+    // once a technician can update their position.
+    const TECH_BASE_LOCATION = { lat: 30.3674, lng: -89.0928 };
+
+    let distanceService = null;
+    function initMaps() {
+      distanceService = new google.maps.DistanceMatrixService();
+    }
+
     const screens = {
       services: document.getElementById('screen-services'),
       location: document.getElementById('screen-location'),
@@ -278,7 +306,10 @@
         (pos) => {
           statusEl.style.display = 'none';
           const { latitude, longitude } = pos.coords;
-          finishLocationStep(`GPS location captured (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`);
+          finishLocationStep(
+            `GPS location captured (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
+            { lat: latitude, lng: longitude }
+          );
         },
         (err) => {
           statusEl.style.display = 'none';
@@ -293,19 +324,52 @@
         alert('Please enter an address or cross streets first.');
         return;
       }
-      finishLocationStep(`Address entered: "${address}"`);
+      finishLocationStep(`Address entered: "${address}"`, address);
     });
 
-    function finishLocationStep(locationSummary) {
+    function finishLocationStep(locationSummary, destination) {
       document.getElementById('confirm-summary').textContent =
         `Service: ${selectedService.label}. ${locationSummary}.`;
       showScreen('confirm');
+      calculateEta(destination);
+    }
+
+    function calculateEta(destination) {
+      const etaEl = document.getElementById('eta-result');
+      etaEl.style.display = 'block';
+      etaEl.textContent = 'Calculating your ETA\u2026';
+
+      if (!distanceService) {
+        etaEl.textContent = "Couldn't load ETA right now \u2014 we can still send a tech your way.";
+        return;
+      }
+
+      distanceService.getDistanceMatrix({
+        origins: [TECH_BASE_LOCATION],
+        destinations: [destination],
+        travelMode: google.maps.TravelMode.DRIVING,
+        unitSystem: google.maps.UnitSystem.IMPERIAL,
+      }, (response, status) => {
+        if (status !== 'OK') {
+          etaEl.textContent = "Couldn't calculate an ETA for that location \u2014 we can still send a tech your way.";
+          return;
+        }
+        const result = response.rows[0].elements[0];
+        if (result.status !== 'OK') {
+          etaEl.textContent = "Couldn't calculate an ETA for that location \u2014 we can still send a tech your way.";
+          return;
+        }
+        etaEl.innerHTML =
+          `<strong>Estimated arrival: ${result.duration.text}</strong><br>${result.distance.text} away`;
+      });
     }
 
     document.getElementById('start-over-btn').addEventListener('click', () => {
       selectedService = null;
       document.querySelectorAll('.service-btn').forEach(b => b.classList.remove('selected'));
       document.getElementById('manual-address').value = '';
+      document.getElementById('eta-result').style.display = 'none';
+      document.getElementById('eta-result').textContent = '';
       showScreen('services');
     });
   </script>
