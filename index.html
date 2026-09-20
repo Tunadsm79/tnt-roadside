@@ -246,14 +246,23 @@
     </div>
   </main>
 
-  <!-- Screen 3: confirmation placeholder -->
+  <!-- Screen 3: confirmation -->
   <main class="screen" id="screen-confirm">
     <div class="card">
       <h2>Got it!</h2>
       <p id="confirm-summary"></p>
       <div class="eta-box" id="eta-result"></div>
       <div class="eta-box" id="price-result"></div>
-      <p style="margin-top:16px;">Next up: we'll connect you with a nearby tech and handle payment. That part's coming very soon &mdash; thanks for testing TNT Roadside!</p>
+
+      <div id="dispatch-form" style="display:none;">
+        <p style="margin-top:16px; font-size:13px;">Last step &mdash; how should the tech reach you?</p>
+        <input type="text" id="customer-name" placeholder="Your name">
+        <input type="text" id="customer-phone" placeholder="Phone number">
+        <button class="btn" id="confirm-dispatch-btn">Confirm Dispatch</button>
+      </div>
+
+      <div class="eta-box" id="dispatch-status"></div>
+
       <button class="btn secondary" id="start-over-btn" style="margin-top: 20px;">Start Over</button>
     </div>
   </main>
@@ -265,8 +274,18 @@
   <!-- Loads Google's map code so we can calculate driving distance/ETA.
        This key is restricted (in Google Cloud) to only run on tnt-roadside.vercel.app -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZEELZJOoritTGoNx44ajUfsYdUNa8vAM&callback=initMaps&loading=async" async defer></script>
+  <!-- Supabase client library -- used to write each dispatch request to the database. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <script>
+    // Supabase project connection info. The anon/publishable key is meant to
+    // be public -- it's restricted by Row Level Security policies in the
+    // database (see supabase/schema.sql: anon can INSERT into customers and
+    // jobs, but can't read anything back), not by being secret.
+    const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_UwjdR9XkwjTC8seuP5GXsA_QimEYwZ1';
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
     // Real starting point: Bayberry RV Park, where Demian is based.
     // TEMPORARY: standing in for "the technician's current location" until
     // step 8 (live tech GPS tracking) is built and a real technician
@@ -299,6 +318,14 @@
     function initMaps() {
       distanceService = new google.maps.DistanceMatrixService();
     }
+
+    // Tracks the current job's computed details so Confirm Dispatch can
+    // write them to Supabase without recalculating anything.
+    let currentDestination = null;
+    let currentDistanceMiles = null;
+    let currentEtaMinutes = null;
+    let currentPrice = null;
+    let etaOk = false;
 
     const screens = {
       services: document.getElementById('screen-services'),
@@ -381,6 +408,10 @@
         : '';
       document.getElementById('confirm-summary').textContent =
         `Service: ${selectedService.label}${tireNote}. ${locationSummary}.`;
+      currentDestination = destination;
+      document.getElementById('dispatch-form').style.display = 'none';
+      document.getElementById('dispatch-status').style.display = 'none';
+      document.getElementById('dispatch-status').textContent = '';
       showScreen('confirm');
       calculateEta(destination);
     }
@@ -391,6 +422,8 @@
       etaEl.style.display = 'block';
       etaEl.textContent = 'Calculating your ETA\u2026';
       priceEl.style.display = 'none';
+      etaOk = false;
+      document.getElementById('dispatch-form').style.display = 'none';
 
       if (!distanceService) {
         etaEl.textContent = "Couldn't load ETA right now \u2014 we can still send a tech your way.";
@@ -423,6 +456,10 @@
           return;
         }
 
+        currentDistanceMiles = distanceMiles;
+        currentEtaMinutes = Math.round(result.duration.value / 60);
+        etaOk = true;
+
         etaEl.innerHTML =
           `<strong>Estimated arrival: ${result.duration.text}</strong><br>${result.distance.text} away`;
 
@@ -435,9 +472,11 @@
       priceEl.style.display = 'block';
 
       if (isAfterHours()) {
+        currentPrice = null;
         priceEl.innerHTML =
           `<strong>After-hours rate: $${AFTER_HOURS_RATE}/hr per car</strong><br>` +
           `Calls between 7pm\u20137am are billed hourly instead of the standard flat rate.`;
+        if (etaOk) document.getElementById('dispatch-form').style.display = 'block';
         return;
       }
 
@@ -447,20 +486,92 @@
         const count = selectedService.tireCount || 1;
         const extra = Math.max(0, count - 1);
         const total = SERVICE_PRICES.flat_tire + extra * 10;
+        currentPrice = total;
         priceEl.innerHTML = extra > 0
           ? `<strong>Price: $${total}</strong><br>$${SERVICE_PRICES.flat_tire} first tire + $10 \u00d7 ${extra} additional`
           : `<strong>Price: $${total}</strong>`;
+        if (etaOk) document.getElementById('dispatch-form').style.display = 'block';
         return;
       }
 
       if (serviceId === 'fuel_delivery') {
+        currentPrice = SERVICE_PRICES.fuel_delivery;
         priceEl.innerHTML =
           `<strong>Price: $${SERVICE_PRICES.fuel_delivery} + cost of fuel</strong><br>` +
           `Fuel is charged at cost, added to the $${SERVICE_PRICES.fuel_delivery} delivery fee.`;
+        if (etaOk) document.getElementById('dispatch-form').style.display = 'block';
         return;
       }
 
+      currentPrice = SERVICE_PRICES[serviceId];
       priceEl.innerHTML = `<strong>Price: $${SERVICE_PRICES[serviceId]}</strong>`;
+      if (etaOk) document.getElementById('dispatch-form').style.display = 'block';
+    }
+
+    document.getElementById('confirm-dispatch-btn').addEventListener('click', submitDispatch);
+
+    async function submitDispatch() {
+      const nameEl = document.getElementById('customer-name');
+      const phoneEl = document.getElementById('customer-phone');
+      const name = nameEl.value.trim();
+      const phone = phoneEl.value.trim();
+      const statusEl = document.getElementById('dispatch-status');
+      const btn = document.getElementById('confirm-dispatch-btn');
+
+      if (!name || !phone) {
+        alert('Please enter your name and phone number so a tech can reach you.');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Sending\u2026';
+      statusEl.style.display = 'none';
+
+      // Generated here (not by Supabase) so we never have to read a row
+      // back after inserting it -- the anon key can INSERT but can't
+      // SELECT, which keeps other customers' names/phone numbers
+      // unreadable to it.
+      const customerId = crypto.randomUUID();
+      const jobId = crypto.randomUUID();
+
+      const lat = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lat : null;
+      const lng = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lng : null;
+
+      try {
+        const { error: custError } = await supabaseClient.from('customers').insert({
+          id: customerId,
+          name: name,
+          phone: phone
+        });
+        if (custError) throw custError;
+
+        const { error: jobError } = await supabaseClient.from('jobs').insert({
+          id: jobId,
+          customer_id: customerId,
+          service_type: selectedService.id,
+          status: 'requested',
+          payment_status: 'none',
+          customer_lat: lat,
+          customer_lng: lng,
+          eta_minutes: currentEtaMinutes,
+          distance_miles: currentDistanceMiles,
+          price: currentPrice
+        });
+        if (jobError) throw jobError;
+
+        document.getElementById('dispatch-form').style.display = 'none';
+        statusEl.style.display = 'block';
+        statusEl.innerHTML =
+          `<strong>Dispatch confirmed!</strong><br>A technician has been notified and is on the way. ` +
+          `We'll call ${phone} if we need anything else.`;
+      } catch (err) {
+        console.error('Dispatch failed:', err);
+        btn.disabled = false;
+        btn.textContent = 'Confirm Dispatch';
+        statusEl.style.display = 'block';
+        statusEl.innerHTML =
+          `<strong>Something went wrong sending your request.</strong><br>Please try again, or call us directly.`;
+      }
     }
 
     document.getElementById('start-over-btn').addEventListener('click', () => {
@@ -473,6 +584,19 @@
       document.getElementById('price-result').textContent = '';
       document.getElementById('tire-count-row').style.display = 'none';
       document.getElementById('tire-count').value = '1';
+      document.getElementById('dispatch-form').style.display = 'none';
+      document.getElementById('customer-name').value = '';
+      document.getElementById('customer-phone').value = '';
+      document.getElementById('dispatch-status').style.display = 'none';
+      document.getElementById('dispatch-status').textContent = '';
+      const confirmBtn = document.getElementById('confirm-dispatch-btn');
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Confirm Dispatch';
+      currentDestination = null;
+      currentDistanceMiles = null;
+      currentEtaMinutes = null;
+      currentPrice = null;
+      etaOk = false;
       showScreen('services');
     });
   </script>
