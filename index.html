@@ -748,6 +748,11 @@
 
       const lat = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lat : null;
       const lng = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lng : null;
+      // A manually-typed address is a plain string; a GPS location is a
+      // {lat,lng} object. Save the string so the tech has something to
+      // actually navigate to -- previously this was only used for the
+      // distance calculation above and then thrown away.
+      const customerAddress = (currentDestination && typeof currentDestination === 'string') ? currentDestination : null;
 
       const technician = await fetchActiveTechnician();
 
@@ -812,6 +817,7 @@
           payment_status: 'authorized',
           customer_lat: lat,
           customer_lng: lng,
+          customer_address: customerAddress,
           eta_minutes: currentEtaMinutes,
           distance_miles: currentDistanceMiles,
           price: currentPrice,

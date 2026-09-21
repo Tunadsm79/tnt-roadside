@@ -112,6 +112,25 @@
       margin-top: 4px;
     }
     .job-actions button { flex: 1; }
+    .job-address {
+      font-size: 13px;
+      color: #cbd5e1;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .job-directions {
+      display: inline-block;
+      text-align: center;
+      text-decoration: none;
+      padding: 10px;
+      border-radius: 8px;
+      background: #f97316;
+      color: #0f172a;
+      font-weight: 700;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
@@ -138,6 +157,8 @@
           <div class="job-service" id="job-service"></div>
           <div class="job-price" id="job-price"></div>
           <div class="job-meta" id="job-meta"></div>
+          <div class="job-address" id="job-address"></div>
+          <a href="#" target="_blank" rel="noopener" class="job-directions hidden" id="job-directions">Get Directions</a>
           <div class="tracking-line hidden" id="tracking-indicator">
             <span class="tracking-dot"></span>Sharing your live location with the customer
           </div>
@@ -184,6 +205,8 @@
     const jobService = document.getElementById('job-service');
     const jobPrice = document.getElementById('job-price');
     const jobMeta = document.getElementById('job-meta');
+    const jobAddress = document.getElementById('job-address');
+    const jobDirections = document.getElementById('job-directions');
     const trackingIndicator = document.getElementById('tracking-indicator');
     const completeBtn = document.getElementById('complete-btn');
     const cancelBtn = document.getElementById('cancel-btn');
@@ -284,7 +307,7 @@
       try {
         const { data, error } = await supabaseClient
           .from('active_jobs_view')
-          .select('*')
+          .select('id, service_type, price, status, payment_status, created_at, customer_lat, customer_lng, customer_address')
           .order('created_at', { ascending: false })
           .limit(1);
         if (error) throw error;
@@ -311,6 +334,23 @@
           ? ('$' + Number(job.price).toFixed(2))
           : 'After-hours job (est. $125 held)';
         jobMeta.textContent = 'Dispatched ' + new Date(job.created_at).toLocaleTimeString();
+
+        // Where to actually go. A typed address is shown as-is and linked
+        // straight to Maps directions; a GPS-based job has coordinates but
+        // no address text, so those get used instead. If neither is on
+        // file (shouldn't normally happen), tell the tech to call.
+        if (job.customer_address) {
+          jobAddress.textContent = job.customer_address;
+          jobDirections.href = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(job.customer_address);
+          jobDirections.classList.remove('hidden');
+        } else if (job.customer_lat != null && job.customer_lng != null) {
+          jobAddress.textContent = 'GPS location (' + job.customer_lat.toFixed(5) + ', ' + job.customer_lng.toFixed(5) + ')';
+          jobDirections.href = 'https://www.google.com/maps/dir/?api=1&destination=' + job.customer_lat + ',' + job.customer_lng;
+          jobDirections.classList.remove('hidden');
+        } else {
+          jobAddress.textContent = 'No location on file -- call the customer.';
+          jobDirections.classList.add('hidden');
+        }
 
         if (isNewJob) startContinuousTracking();
       } catch (err) {
