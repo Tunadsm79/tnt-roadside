@@ -95,6 +95,6 @@ module.exports = async (req, res) => {
     res.status(200).json({ status: intent.status, amountCaptured: intent.amount_received });
   } catch (err) {
     console.error('complete-job error:', err);
-    res.status(500).json({ error: 'Could not complete job' });
+    res.status(500).json({ error: 'Could not complete job', detail: err.message });
   }
 };
