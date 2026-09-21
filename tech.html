@@ -58,6 +58,11 @@
       border: 1px solid #334155;
       color: #94a3b8;
     }
+    button.danger {
+      background: transparent;
+      border: 1px solid #f87171;
+      color: #f87171;
+    }
     .status {
       font-size: 14px;
       color: #94a3b8;
@@ -70,6 +75,43 @@
       font-size: 13px;
       color: #64748b;
     }
+    #location-screen { width: 100%; }
+    #job-section { width: 100%; margin-top: 24px; }
+    .no-job { color: #64748b; font-size: 14px; }
+    .job-card {
+      width: 100%;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .job-service { font-size: 18px; font-weight: 800; }
+    .job-price { color: #f97316; font-weight: 700; font-size: 16px; }
+    .job-meta { font-size: 13px; color: #94a3b8; }
+    .tracking-line {
+      font-size: 12px;
+      color: #4ade80;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tracking-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4ade80;
+      display: inline-block;
+    }
+    .job-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .job-actions button { flex: 1; }
   </style>
 </head>
 <body>
@@ -88,6 +130,24 @@
       <button id="update-btn">Update My Location</button>
       <div class="status" id="location-status"></div>
       <div class="location-line" id="last-updated"></div>
+
+      <div id="job-section">
+        <div id="job-loading" class="no-job">Checking for an active job...</div>
+        <div id="no-job-message" class="no-job hidden">No active job right now.</div>
+        <div id="job-card" class="job-card hidden">
+          <div class="job-service" id="job-service"></div>
+          <div class="job-price" id="job-price"></div>
+          <div class="job-meta" id="job-meta"></div>
+          <div class="tracking-line hidden" id="tracking-indicator">
+            <span class="tracking-dot"></span>Sharing your live location with the customer
+          </div>
+          <div class="job-actions">
+            <button id="complete-btn">Complete Job</button>
+            <button id="cancel-btn" class="danger">Cancel Job</button>
+          </div>
+          <div class="status" id="job-action-status"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -102,6 +162,13 @@
     const SUPABASE_ANON_KEY = 'sb_publishable_UwjdR9XkwjTC8seuP5GXsA_QimEYwZ1';
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+    const SERVICE_LABELS = {
+      flat_tire: 'Flat Tire',
+      dead_battery: 'Dead Battery',
+      lockout: 'Lockout',
+      fuel_delivery: 'Fuel Delivery'
+    };
+
     const pinScreen = document.getElementById('pin-screen');
     const locationScreen = document.getElementById('location-screen');
     const pinInput = document.getElementById('pin-input');
@@ -111,11 +178,32 @@
     const locationStatus = document.getElementById('location-status');
     const lastUpdated = document.getElementById('last-updated');
 
+    const jobLoading = document.getElementById('job-loading');
+    const noJobMessage = document.getElementById('no-job-message');
+    const jobCard = document.getElementById('job-card');
+    const jobService = document.getElementById('job-service');
+    const jobPrice = document.getElementById('job-price');
+    const jobMeta = document.getElementById('job-meta');
+    const trackingIndicator = document.getElementById('tracking-indicator');
+    const completeBtn = document.getElementById('complete-btn');
+    const cancelBtn = document.getElementById('cancel-btn');
+    const jobActionStatus = document.getElementById('job-action-status');
+
+    let currentJob = null;
+    let watchId = null;
+    let lastGpsWriteAt = 0;
+    // Continuous GPS tracking (while a job is active) can fire many times a
+    // minute -- throttle actual database writes so it doesn't hammer
+    // Supabase or burn data. 5s is frequent enough for a live-feeling
+    // customer ETA without writing on every single GPS event.
+    const GPS_WRITE_MIN_INTERVAL_MS = 5000;
+
     function unlock() {
       if (pinInput.value === TECH_PIN) {
         sessionStorage.setItem('tnt-tech-unlocked', '1');
         pinScreen.classList.add('hidden');
         locationScreen.classList.remove('hidden');
+        startJobPolling();
       } else {
         pinStatus.textContent = 'Wrong PIN.';
         pinInput.value = '';
@@ -132,6 +220,21 @@
     if (sessionStorage.getItem('tnt-tech-unlocked') === '1') {
       pinScreen.classList.add('hidden');
       locationScreen.classList.remove('hidden');
+      startJobPolling();
+    }
+
+    // ---- shared location push (used by both the manual button and the
+    //      automatic continuous tracking below) ----
+    async function pushLocation(latitude, longitude) {
+      const { error } = await supabaseClient
+        .from('technicians')
+        .update({
+          current_lat: latitude,
+          current_lng: longitude,
+          location_updated_at: new Date().toISOString()
+        })
+        .eq('active', true);
+      if (error) throw error;
     }
 
     updateBtn.addEventListener('click', () => {
@@ -146,19 +249,8 @@
 
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
-          const { latitude, longitude } = pos.coords;
           try {
-            const { error } = await supabaseClient
-              .from('technicians')
-              .update({
-                current_lat: latitude,
-                current_lng: longitude,
-                location_updated_at: new Date().toISOString()
-              })
-              .eq('active', true);
-
-            if (error) throw error;
-
+            await pushLocation(pos.coords.latitude, pos.coords.longitude);
             locationStatus.className = 'status ok';
             locationStatus.textContent = 'Location updated.';
             lastUpdated.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
@@ -179,6 +271,121 @@
         { enableHighAccuracy: true, timeout: 12000 }
       );
     });
+
+    // ---- active job: shows whatever job is currently open (not completed
+    //      or cancelled), lets the tech close it out ----
+    function startJobPolling() {
+      refreshActiveJob();
+      // Catches a newly-dispatched job while this page is left open.
+      setInterval(refreshActiveJob, 10000);
+    }
+
+    async function refreshActiveJob() {
+      try {
+        const { data, error } = await supabaseClient
+          .from('active_jobs_view')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (error) throw error;
+
+        jobLoading.classList.add('hidden');
+        const job = data && data[0];
+
+        if (!job) {
+          if (currentJob) stopContinuousTracking();
+          currentJob = null;
+          jobCard.classList.add('hidden');
+          noJobMessage.classList.remove('hidden');
+          return;
+        }
+
+        noJobMessage.classList.add('hidden');
+        jobCard.classList.remove('hidden');
+
+        const isNewJob = !currentJob || currentJob.id !== job.id;
+        currentJob = job;
+
+        jobService.textContent = SERVICE_LABELS[job.service_type] || job.service_type;
+        jobPrice.textContent = job.price != null
+          ? ('$' + Number(job.price).toFixed(2))
+          : 'After-hours job (est. $125 held)';
+        jobMeta.textContent = 'Dispatched ' + new Date(job.created_at).toLocaleTimeString();
+
+        if (isNewJob) startContinuousTracking();
+      } catch (err) {
+        console.error('refreshActiveJob failed:', err);
+        jobLoading.classList.add('hidden');
+      }
+    }
+
+    // ---- continuous GPS tracking while a job is open, so the customer's
+    //      tracking screen shows a genuinely live ETA rather than only
+    //      updating when the manual button is tapped ----
+    function startContinuousTracking() {
+      if (!navigator.geolocation || watchId !== null) return;
+      trackingIndicator.classList.remove('hidden');
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const now = Date.now();
+          if (now - lastGpsWriteAt < GPS_WRITE_MIN_INTERVAL_MS) return;
+          lastGpsWriteAt = now;
+          pushLocation(pos.coords.latitude, pos.coords.longitude).then(() => {
+            lastUpdated.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+          }).catch((err) => {
+            console.error('Continuous location push failed:', err);
+          });
+        },
+        (err) => console.error('watchPosition error:', err),
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      );
+    }
+
+    function stopContinuousTracking() {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      trackingIndicator.classList.add('hidden');
+    }
+
+    // ---- Complete Job / Cancel Job -- these are the buttons that actually
+    //      move money (capture the Stripe hold, or release it) ----
+    completeBtn.addEventListener('click', () => handleJobAction('complete'));
+    cancelBtn.addEventListener('click', () => handleJobAction('cancel'));
+
+    async function handleJobAction(action) {
+      if (!currentJob) return;
+      completeBtn.disabled = true;
+      cancelBtn.disabled = true;
+      jobActionStatus.className = 'status';
+      jobActionStatus.textContent = action === 'complete' ? 'Capturing payment...' : 'Releasing hold...';
+
+      try {
+        const endpoint = action === 'complete' ? '/api/complete-job' : '/api/cancel-job';
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: currentJob.id })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+
+        jobActionStatus.className = 'status ok';
+        jobActionStatus.textContent = action === 'complete'
+          ? 'Job completed -- payment captured.'
+          : 'Job cancelled -- hold released.';
+        stopContinuousTracking();
+        currentJob = null;
+        setTimeout(refreshActiveJob, 1500);
+      } catch (err) {
+        console.error(action + ' failed:', err);
+        jobActionStatus.className = 'status error';
+        jobActionStatus.textContent = 'Something went wrong: ' + err.message;
+        completeBtn.disabled = false;
+        cancelBtn.disabled = false;
+      }
+    }
   </script>
 </body>
 </html>
