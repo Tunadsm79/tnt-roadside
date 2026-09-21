@@ -136,6 +136,20 @@
     }
     input[type="text"]::placeholder { color: #64748b; }
 
+    .card-element-wrapper {
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      margin-top: 12px;
+    }
+    .card-error {
+      display: none;
+      color: #f87171;
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
     .btn {
       display: inline-block;
       width: 100%;
@@ -320,6 +334,8 @@
         <p style="margin-top:16px; font-size:13px;">Last step &mdash; how should the tech reach you?</p>
         <input type="text" id="customer-name" placeholder="Your name">
         <input type="text" id="customer-phone" placeholder="Phone number">
+        <div class="card-element-wrapper" id="card-element"></div>
+        <div class="card-error" id="card-errors"></div>
         <button class="btn" id="confirm-dispatch-btn">Confirm Dispatch</button>
       </div>
 
@@ -364,6 +380,9 @@
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZEELZJOoritTGoNx44ajUfsYdUNa8vAM&callback=initMaps&loading=async" async defer></script>
   <!-- Supabase client library -- used to write each dispatch request to the database. -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Stripe.js -- must be loaded directly from js.stripe.com (not a CDN
+       mirror) for Stripe's own fraud detection to work correctly. -->
+  <script src="https://js.stripe.com/v3/"></script>
 
   <script>
     // Supabase project connection info. The anon/publishable key is meant to
@@ -373,6 +392,34 @@
     const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_UwjdR9XkwjTC8seuP5GXsA_QimEYwZ1';
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // Stripe publishable key -- safe to expose in frontend code, same as
+    // the Supabase anon key above. The secret key lives only in the
+    // Vercel serverless functions under /api, as an environment variable.
+    const STRIPE_PUBLISHABLE_KEY = 'pk_test_51NXQNYAc39bVQTobmZU8oNDHLVjrT9XQaW2bfkbySPoG7qnIeKeed6yS0paX3wzP3blpeNnuMuHXmKgyJXMpzN3E00rMA1gG25';
+    const stripeClient = Stripe(STRIPE_PUBLISHABLE_KEY);
+    const stripeElements = stripeClient.elements();
+    const cardElement = stripeElements.create('card', {
+      style: {
+        base: {
+          color: '#f8fafc',
+          fontSize: '15px',
+          '::placeholder': { color: '#64748b' }
+        },
+        invalid: { color: '#f87171' }
+      }
+    });
+    cardElement.mount('#card-element');
+    cardElement.on('change', (event) => {
+      const cardErrorsEl = document.getElementById('card-errors');
+      if (event.error) {
+        cardErrorsEl.textContent = event.error.message;
+        cardErrorsEl.style.display = 'block';
+      } else {
+        cardErrorsEl.textContent = '';
+        cardErrorsEl.style.display = 'none';
+      }
+    });
 
     // Real starting point: Bayberry RV Park, where Demian is based.
     // TEMPORARY: standing in for "the technician's current location" until
@@ -680,6 +727,7 @@
       const phone = phoneEl.value.trim();
       const statusEl = document.getElementById('dispatch-status');
       const btn = document.getElementById('confirm-dispatch-btn');
+      const cardErrorsEl = document.getElementById('card-errors');
 
       if (!name || !phone) {
         alert('Please enter your name and phone number so a tech can reach you.');
@@ -687,8 +735,9 @@
       }
 
       btn.disabled = true;
-      btn.textContent = 'Sending\u2026';
+      btn.textContent = 'Authorizing card\u2026';
       statusEl.style.display = 'none';
+      cardErrorsEl.style.display = 'none';
 
       // Generated here (not by Supabase) so we never have to read a row
       // back after inserting it -- the anon key can INSERT but can't
@@ -702,7 +751,52 @@
 
       const technician = await fetchActiveTechnician();
 
+      // Amount to place on hold right now. After-hours jobs don't have a
+      // final price yet (billed hourly once the job wraps up), so we
+      // authorize one hour ($125) as an estimate and settle the real
+      // amount when the hold is captured later.
+      const authorizeAmount = currentPrice != null ? currentPrice : AFTER_HOURS_RATE;
+      const paymentAmountCents = Math.round(authorizeAmount * 100);
+      let paymentIntentId = null;
+
       try {
+        // 1. Ask our server to open a PaymentIntent (needs the Stripe
+        //    secret key, so this has to happen server-side -- see
+        //    api/create-payment-intent.js).
+        const intentResponse = await fetch('/api/create-payment-intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: paymentAmountCents,
+            service_type: selectedService.id,
+            job_id: jobId
+          })
+        });
+        const intentData = await intentResponse.json();
+        if (!intentResponse.ok || !intentData.clientSecret) {
+          throw new Error(intentData.error || 'Could not start card authorization.');
+        }
+        paymentIntentId = intentData.paymentIntentId;
+
+        // 2. Confirm the card with Stripe.js -- this is the step that
+        //    actually places the authorization hold. Card details go
+        //    straight from the browser to Stripe; our server never sees
+        //    them.
+        const { error: stripeError, paymentIntent } = await stripeClient.confirmCardPayment(
+          intentData.clientSecret,
+          { payment_method: { card: cardElement, billing_details: { name: name } } }
+        );
+
+        if (stripeError) {
+          throw new Error(stripeError.message || 'Card was declined.');
+        }
+        if (!paymentIntent || paymentIntent.status !== 'requires_capture') {
+          throw new Error('Card authorization did not complete. Please try again.');
+        }
+
+        btn.textContent = 'Sending\u2026';
+
+        // 3. Card is authorized -- now write the job to Supabase.
         const { error: custError } = await supabaseClient.from('customers').insert({
           id: customerId,
           name: name,
@@ -715,7 +809,7 @@
           customer_id: customerId,
           service_type: selectedService.id,
           status: 'requested',
-          payment_status: 'none',
+          payment_status: 'authorized',
           customer_lat: lat,
           customer_lng: lng,
           eta_minutes: currentEtaMinutes,
@@ -724,6 +818,17 @@
           technician_id: technician ? technician.id : null
         });
         if (jobError) throw jobError;
+
+        const { error: paymentError } = await supabaseClient.from('payments').insert({
+          job_id: jobId,
+          amount: authorizeAmount,
+          stripe_payment_intent_id: paymentIntentId,
+          status: 'authorized',
+          authorized_at: new Date().toISOString()
+        });
+        if (paymentError) {
+          console.error('payments row failed (non-fatal, card is still authorized):', paymentError);
+        }
 
         document.getElementById('dispatch-form').style.display = 'none';
 
@@ -741,7 +846,7 @@
         btn.textContent = 'Confirm Dispatch';
         statusEl.style.display = 'block';
         statusEl.innerHTML =
-          `<strong>Something went wrong sending your request.</strong><br>Please try again, or call us directly.`;
+          `<strong>${(err && err.message) || 'Something went wrong sending your request.'}</strong><br>Please try again, or call us directly.`;
       }
     }
 
@@ -760,6 +865,9 @@
       document.getElementById('customer-phone').value = '';
       document.getElementById('dispatch-status').style.display = 'none';
       document.getElementById('dispatch-status').textContent = '';
+      cardElement.clear();
+      document.getElementById('card-errors').style.display = 'none';
+      document.getElementById('card-errors').textContent = '';
       const confirmBtn = document.getElementById('confirm-dispatch-btn');
       confirmBtn.disabled = false;
       confirmBtn.textContent = 'Confirm Dispatch';
