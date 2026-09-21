@@ -329,6 +329,20 @@
     </div>
   </main>
 
+  <!-- Screen 4: live tracking, shown after a successful dispatch -->
+  <main class="screen" id="screen-tracking">
+    <div class="card">
+      <h2>Help is on the way</h2>
+      <p id="tracking-tech-name">Your technician has been notified.</p>
+
+      <div class="eta-box" id="tracking-eta" style="display:block;">Waiting for technician location&hellip;</div>
+
+      <p id="tracking-updated" style="margin-top:8px; font-size:13px;"></p>
+
+      <button class="btn secondary" id="tracking-start-over-btn" style="margin-top: 20px;">Start Over</button>
+    </div>
+  </main>
+
   <footer>
     &copy; 2026 TNT Roadside. Available 7 days a week.
   </footer>
@@ -400,6 +414,7 @@
       services: document.getElementById('screen-services'),
       location: document.getElementById('screen-location'),
       confirm: document.getElementById('screen-confirm'),
+      tracking: document.getElementById('screen-tracking'),
     };
 
     function showScreen(name) {
@@ -577,6 +592,85 @@
       if (etaOk) document.getElementById('dispatch-form').style.display = 'block';
     }
 
+    // ---- Live tracking (build-order item 8) ----
+    // Polls the one active technician's location (see supabase/schema.sql
+    // and the technician_locations view) and recomputes ETA/distance the
+    // same way the initial estimate was computed, just with the
+    // technician's live coordinates as the origin instead of the fixed
+    // TECH_BASE_LOCATION. Works for both GPS-captured and manually-typed
+    // customer addresses -- DistanceMatrixService accepts either a string
+    // address or a {lat,lng} object as the destination, same as before.
+    let trackingInterval = null;
+    const TRACKING_POLL_MS = 15000;
+
+    async function fetchActiveTechnician() {
+      try {
+        const { data, error } = await supabaseClient
+          .from('technician_locations')
+          .select('id, name, current_lat, current_lng, location_updated_at')
+          .eq('active', true)
+          .limit(1)
+          .maybeSingle();
+        if (error || !data) return null;
+        return data;
+      } catch (err) {
+        console.error('Could not fetch technician location:', err);
+        return null;
+      }
+    }
+
+    function updateTrackingDisplay(destination, technician) {
+      const nameEl = document.getElementById('tracking-tech-name');
+      const etaEl = document.getElementById('tracking-eta');
+      const updatedEl = document.getElementById('tracking-updated');
+
+      nameEl.textContent = technician.name
+        ? `${technician.name} has been notified and is on the way.`
+        : 'Your technician has been notified and is on the way.';
+
+      if (technician.location_updated_at) {
+        const updated = new Date(technician.location_updated_at);
+        updatedEl.textContent = `Location last updated ${updated.toLocaleTimeString()}`;
+      }
+
+      if (technician.current_lat == null || technician.current_lng == null || !distanceService) {
+        etaEl.textContent = 'Waiting for technician location…';
+        return;
+      }
+
+      const origin = { lat: technician.current_lat, lng: technician.current_lng };
+      distanceService.getDistanceMatrix({
+        origins: [origin],
+        destinations: [destination],
+        travelMode: google.maps.TravelMode.DRIVING,
+        unitSystem: google.maps.UnitSystem.IMPERIAL,
+      }, (response, status) => {
+        if (status !== 'OK' || response.rows[0].elements[0].status !== 'OK') {
+          etaEl.textContent = "Couldn't refresh the ETA just now — still on the way.";
+          return;
+        }
+        const result = response.rows[0].elements[0];
+        etaEl.innerHTML = `<strong>${result.duration.text} away</strong><br>${result.distance.text}`;
+      });
+    }
+
+    function startTracking(destination, technician) {
+      showScreen('tracking');
+      updateTrackingDisplay(destination, technician);
+      stopTracking();
+      trackingInterval = setInterval(async () => {
+        const fresh = await fetchActiveTechnician();
+        if (fresh) updateTrackingDisplay(destination, fresh);
+      }, TRACKING_POLL_MS);
+    }
+
+    function stopTracking() {
+      if (trackingInterval) {
+        clearInterval(trackingInterval);
+        trackingInterval = null;
+      }
+    }
+
     document.getElementById('confirm-dispatch-btn').addEventListener('click', submitDispatch);
 
     async function submitDispatch() {
@@ -606,6 +700,8 @@
       const lat = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lat : null;
       const lng = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lng : null;
 
+      const technician = await fetchActiveTechnician();
+
       try {
         const { error: custError } = await supabaseClient.from('customers').insert({
           id: customerId,
@@ -624,15 +720,21 @@
           customer_lng: lng,
           eta_minutes: currentEtaMinutes,
           distance_miles: currentDistanceMiles,
-          price: currentPrice
+          price: currentPrice,
+          technician_id: technician ? technician.id : null
         });
         if (jobError) throw jobError;
 
         document.getElementById('dispatch-form').style.display = 'none';
-        statusEl.style.display = 'block';
-        statusEl.innerHTML =
-          `<strong>Dispatch confirmed!</strong><br>A technician has been notified and is on the way. ` +
-          `We'll call ${phone} if we need anything else.`;
+
+        if (technician) {
+          startTracking(currentDestination, technician);
+        } else {
+          statusEl.style.display = 'block';
+          statusEl.innerHTML =
+            `<strong>Dispatch confirmed!</strong><br>A technician has been notified and is on the way. ` +
+            `We'll call ${phone} if we need anything else.`;
+        }
       } catch (err) {
         console.error('Dispatch failed:', err);
         btn.disabled = false;
@@ -643,7 +745,7 @@
       }
     }
 
-    document.getElementById('start-over-btn').addEventListener('click', () => {
+    function resetToServices() {
       selectedService = null;
       document.querySelectorAll('.service-btn').forEach(b => b.classList.remove('selected'));
       document.getElementById('manual-address').value = '';
@@ -667,6 +769,13 @@
       currentPrice = null;
       etaOk = false;
       showScreen('services');
+    }
+
+    document.getElementById('start-over-btn').addEventListener('click', resetToServices);
+
+    document.getElementById('tracking-start-over-btn').addEventListener('click', () => {
+      stopTracking();
+      resetToServices();
     });
   </script>
   <script>

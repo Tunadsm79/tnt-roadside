@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TNT Roadside &mdash; Technician</title>
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 360px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-items: center;
+      text-align: center;
+    }
+    h1 { font-size: 22px; font-weight: 800; }
+    h1 span { color: #f97316; }
+    p.sub { color: #94a3b8; font-size: 14px; }
+    input[type="password"], input[type="tel"] {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #f8fafc;
+      font-size: 18px;
+      text-align: center;
+      letter-spacing: 4px;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: none;
+      background: #f97316;
+      color: #0f172a;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button.secondary {
+      background: transparent;
+      border: 1px solid #334155;
+      color: #94a3b8;
+    }
+    .status {
+      font-size: 14px;
+      color: #94a3b8;
+      min-height: 20px;
+    }
+    .status.error { color: #f87171; }
+    .status.ok { color: #4ade80; }
+    .hidden { display: none; }
+    .location-line {
+      font-size: 13px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>TNT <span>Roadside</span></h1>
+
+    <div id="pin-screen">
+      <p class="sub">Technician access only</p>
+      <input type="password" id="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="PIN">
+      <div class="status error" id="pin-status"></div>
+      <button id="pin-submit">Unlock</button>
+    </div>
+
+    <div id="location-screen" class="hidden">
+      <p class="sub">Tap to share your current location. Customers see this as your live ETA.</p>
+      <button id="update-btn">Update My Location</button>
+      <div class="status" id="location-status"></div>
+      <div class="location-line" id="last-updated"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // Deliberately simple deterrent, not real security -- see project docs.
+    // Anyone determined enough to read this page's source can find the PIN.
+    // Fine for now: single technician (Demian), page isn't linked publicly.
+    const TECH_PIN = '5817';
+
+    const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_UwjdR9XkwjTC8seuP5GXsA_QimEYwZ1';
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const pinScreen = document.getElementById('pin-screen');
+    const locationScreen = document.getElementById('location-screen');
+    const pinInput = document.getElementById('pin-input');
+    const pinStatus = document.getElementById('pin-status');
+    const pinSubmit = document.getElementById('pin-submit');
+    const updateBtn = document.getElementById('update-btn');
+    const locationStatus = document.getElementById('location-status');
+    const lastUpdated = document.getElementById('last-updated');
+
+    function unlock() {
+      if (pinInput.value === TECH_PIN) {
+        sessionStorage.setItem('tnt-tech-unlocked', '1');
+        pinScreen.classList.add('hidden');
+        locationScreen.classList.remove('hidden');
+      } else {
+        pinStatus.textContent = 'Wrong PIN.';
+        pinInput.value = '';
+      }
+    }
+
+    pinSubmit.addEventListener('click', unlock);
+    pinInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') unlock();
+    });
+
+    // Stay unlocked for the rest of this browser tab/session -- avoids
+    // re-entering the PIN every time if he leaves the page open on his phone.
+    if (sessionStorage.getItem('tnt-tech-unlocked') === '1') {
+      pinScreen.classList.add('hidden');
+      locationScreen.classList.remove('hidden');
+    }
+
+    updateBtn.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        locationStatus.className = 'status error';
+        locationStatus.textContent = 'Geolocation not supported on this device.';
+        return;
+      }
+      updateBtn.disabled = true;
+      locationStatus.className = 'status';
+      locationStatus.textContent = 'Getting your location...';
+
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const { latitude, longitude } = pos.coords;
+          try {
+            const { error } = await supabaseClient
+              .from('technicians')
+              .update({
+                current_lat: latitude,
+                current_lng: longitude,
+                location_updated_at: new Date().toISOString()
+              })
+              .eq('active', true);
+
+            if (error) throw error;
+
+            locationStatus.className = 'status ok';
+            locationStatus.textContent = 'Location updated.';
+            lastUpdated.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+          } catch (err) {
+            console.error('Location update failed:', err);
+            locationStatus.className = 'status error';
+            locationStatus.textContent = 'Something went wrong saving your location.';
+          } finally {
+            updateBtn.disabled = false;
+          }
+        },
+        (err) => {
+          console.error('Geolocation error:', err);
+          locationStatus.className = 'status error';
+          locationStatus.textContent = 'Could not get your location. Check location permissions.';
+          updateBtn.disabled = false;
+        },
+        { enableHighAccuracy: true, timeout: 12000 }
+      );
+    });
+  </script>
+</body>
+</html>
