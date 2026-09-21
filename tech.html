@@ -131,11 +131,73 @@
       font-weight: 700;
       font-size: 14px;
     }
+    .install-banner {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      background: #1e293b;
+      border: 1px solid #f97316;
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 20px;
+    }
+    .install-banner-text {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .install-banner-text strong {
+      font-size: 14px;
+      color: #f8fafc;
+    }
+    .install-banner-text span {
+      font-size: 13px;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
+    .install-banner-btn {
+      flex-shrink: 0;
+      background: #f97316;
+      color: #0f172a;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .install-banner-close {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      color: #64748b;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 4px;
+    }
   </style>
+  <link rel="manifest" href="/tech-manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TNT Tech">
 </head>
 <body>
   <div class="card">
     <h1>TNT <span>Roadside</span></h1>
+
+    <div class="install-banner" id="install-banner">
+      <div class="install-banner-text">
+        <strong>Install TNT Tech</strong>
+        <span id="install-banner-sub">Add this to your home screen for one-tap access.</span>
+      </div>
+      <button class="install-banner-btn" id="install-btn">Install</button>
+      <button class="install-banner-close" id="install-dismiss" aria-label="Dismiss">&times;</button>
+    </div>
 
     <div id="pin-screen">
       <p class="sub">Technician access only</p>
@@ -425,6 +487,65 @@
         completeBtn.disabled = false;
         cancelBtn.disabled = false;
       }
+    }
+  </script>
+
+  <script>
+    (function () {
+      const banner = document.getElementById('install-banner');
+      const sub = document.getElementById('install-banner-sub');
+      const installBtn = document.getElementById('install-btn');
+      const dismissBtn = document.getElementById('install-dismiss');
+      let deferredPrompt = null;
+
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true;
+      const dismissed = localStorage.getItem('tnt-tech-install-dismissed') === '1';
+      const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+
+      if (!isStandalone && !dismissed && isIOS) {
+        // Safari has no programmatic install prompt -- show instructions
+        // instead of a button that would do nothing when tapped.
+        installBtn.style.display = 'none';
+        sub.textContent = 'Tap the Share icon below, then "Add to Home Screen."';
+        banner.style.display = 'flex';
+      }
+
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        if (!isStandalone && !dismissed) {
+          banner.style.display = 'flex';
+        }
+      });
+
+      installBtn.addEventListener('click', async () => {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        banner.style.display = 'none';
+      });
+
+      dismissBtn.addEventListener('click', () => {
+        banner.style.display = 'none';
+        localStorage.setItem('tnt-tech-install-dismissed', '1');
+      });
+
+      window.addEventListener('appinstalled', () => {
+        banner.style.display = 'none';
+      });
+    })();
+  </script>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch((err) => {
+          console.error('Service worker registration failed:', err);
+        });
+      });
     }
   </script>
 </body>
