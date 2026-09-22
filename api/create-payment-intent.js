@@ -3,8 +3,8 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Creates a Stripe PaymentIntent in manual-capture mode -- this places an
 // authorization hold on the customer's card without charging it. The hold
-// is captured later (job completed) or released (job cancelled), neither
-// of which is wired up to a button yet -- see project reference doc.
+// is captured later via api/complete-job.js (job completed, full or partial
+// amount) or released via api/cancel-job.js (job cancelled, full release).
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
