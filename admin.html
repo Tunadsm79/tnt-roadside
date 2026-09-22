@@ -201,6 +201,26 @@
     }
     .tech-pill.on { background: #14532d; color: #86efac; }
     .tech-pill.off { background: #334155; color: #94a3b8; }
+    .tech-row { cursor: pointer; }
+    .tech-row:active { opacity: 0.8; }
+    .tech-detail {
+      margin-top: 4px;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+    }
+    .tech-detail-name { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .tech-detail-meta { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+    .tech-detail-note { font-size: 12px; color: #64748b; margin-bottom: 10px; }
+    .tech-detail button {
+      width: auto;
+      padding: 8px 16px;
+      font-size: 13px;
+      margin-right: 8px;
+    }
+    .tech-detail button.off-duty-btn { background: #334155; color: #e2e8f0; }
     .install-banner {
       display: none;
       align-items: center;
@@ -288,6 +308,7 @@
         <div class="tech-section-title">Technicians</div>
         <div id="tech-map" class="tech-map"></div>
         <div id="tech-list">Loading&hellip;</div>
+        <div id="tech-detail" class="hidden"></div>
       </div>
 
       <div class="summary-strip" id="summary-strip">Loading&hellip;</div>
@@ -354,12 +375,14 @@
     const jobListEl = document.getElementById('job-list');
     const techMapEl = document.getElementById('tech-map');
     const techListEl = document.getElementById('tech-list');
+    const techDetailEl = document.getElementById('tech-detail');
 
     let allJobs = [];
     let currentFilter = 'all';
     let techMap = null;
     const techMarkers = {}; // tech name -> google.maps.Marker
     let techPollInterval = null;
+    let selectedTechName = null; // which tech's detail panel is open, if any
     const TECH_POLL_MS = 15000;
 
     function unlock() {
@@ -453,10 +476,80 @@
               '<div class="tech-meta">' + (tech.on_duty ? 'Updated ' + relativeTime(tech.location_updated_at) : 'Off duty') + '</div>' +
             '</div>' +
             '<span class="tech-pill ' + (tech.on_duty ? 'on' : 'off') + '">' + (tech.on_duty ? 'On Duty' : 'Off Duty') + '</span>';
+          // Tap a tech to open/close their detail panel (status + manual
+          // on-duty override). Tapping the already-open one closes it.
+          row.addEventListener('click', () => {
+            selectedTechName = (selectedTechName === tech.name) ? null : tech.name;
+            renderTechDetail(technicians);
+          });
           techListEl.appendChild(row);
         });
       }
       updateTechMap(technicians);
+      renderTechDetail(technicians);
+    }
+
+    // Shows the selected technician's current status plus a manual
+    // On Duty / Off Duty override. This override writes straight to the
+    // same `on_duty` column tech.html's own login/logout flow writes (via
+    // the same /api/tech-heartbeat endpoint) -- it changes whether this
+    // tech is offered new jobs and whether they show on the map, but it
+    // does NOT force-log-out their phone: if tech.html is still unlocked
+    // on their end, they can still see and accept jobs from the shared
+    // job list regardless of what this flips. No remote-lock exists today
+    // -- flagged here in the UI, not just in chat, since it's the kind of
+    // thing an admin would reasonably assume this button does.
+    function renderTechDetail(technicians) {
+      if (!selectedTechName) {
+        techDetailEl.classList.add('hidden');
+        techDetailEl.innerHTML = '';
+        return;
+      }
+      const tech = technicians.find(t => t.name === selectedTechName);
+      if (!tech) {
+        // Selected tech no longer in the list for some reason -- close.
+        selectedTechName = null;
+        techDetailEl.classList.add('hidden');
+        techDetailEl.innerHTML = '';
+        return;
+      }
+      techDetailEl.classList.remove('hidden');
+      techDetailEl.innerHTML =
+        '<div class="tech-detail-name">' + tech.name + '</div>' +
+        '<div class="tech-detail-meta">' +
+          (tech.on_duty ? 'On duty — updated ' + relativeTime(tech.location_updated_at) : 'Off duty') +
+        '</div>' +
+        '<div class="tech-detail-note">Job status (what they’re working, for how long) is coming soon — not built yet.</div>' +
+        '<button class="' + (tech.on_duty ? 'off-duty-btn' : '') + '" id="duty-toggle-btn">' +
+          (tech.on_duty ? 'Set Off Duty' : 'Set On Duty') +
+        '</button>' +
+        '<span class="status error" id="duty-toggle-status" style="display:inline-block;"></span>';
+
+      document.getElementById('duty-toggle-btn').addEventListener('click', () => toggleDuty(tech));
+    }
+
+    async function toggleDuty(tech) {
+      const btn = document.getElementById('duty-toggle-btn');
+      const statusEl = document.getElementById('duty-toggle-status');
+      const nextState = !tech.on_duty;
+      btn.disabled = true;
+      btn.textContent = 'Updating\u2026';
+      statusEl.textContent = '';
+      try {
+        const response = await fetch('/api/tech-heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tech_name: tech.name, on_duty: nextState })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        await loadTechStatus();
+      } catch (err) {
+        console.error('toggleDuty failed:', err);
+        statusEl.textContent = 'Could not update: ' + err.message;
+        btn.disabled = false;
+        btn.textContent = tech.on_duty ? 'Set Off Duty' : 'Set On Duty';
+      }
     }
 
     function updateTechMap(technicians) {
