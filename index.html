@@ -785,15 +785,23 @@
       const etaEl = document.getElementById('tracking-eta');
       const updatedEl = document.getElementById('tracking-updated');
 
-      // Only claim someone's actually "on the way" once the tech has
-      // tapped Accept on tech.html -- before that, be honest that we're
-      // still waiting on a human to confirm, not just software matching.
+      // Match the message to what's actually happened, not just to
+      // software having matched a job to a technician -- the tech.html
+      // lifecycle is requested -> dispatched (accepted) -> en_route (tech
+      // has actually left) -> arrived (tech is on location). "On the way"
+      // is reserved for en_route specifically, so this doesn't say it
+      // before the tech has actually started driving over.
+      const techLabel = technician.name || 'Your technician';
       if (currentJobStatus === 'requested') {
         nameEl.textContent = "We've sent this to your nearest technician — waiting for them to confirm.";
+      } else if (currentJobStatus === 'en_route') {
+        nameEl.textContent = `${techLabel} is on the way.`;
+      } else if (currentJobStatus === 'arrived') {
+        nameEl.textContent = `${techLabel} has arrived at your location.`;
       } else {
-        nameEl.textContent = technician.name
-          ? `${technician.name} has accepted your job and is on the way.`
-          : 'Your technician has accepted your job and is on the way.';
+        // 'dispatched' (accepted, not yet en route) -- and the fallback
+        // for any other/unexpected status value.
+        nameEl.textContent = `${techLabel} has accepted your job and is getting ready to head out.`;
       }
 
       if (technician.location_updated_at) {
@@ -808,6 +816,13 @@
 
       const origin = { lat: technician.current_lat, lng: technician.current_lng };
       ensureTrackingMap(origin);
+
+      // Once arrived, a driving ETA/distance to "yourself" doesn't mean
+      // anything useful -- skip the distance-matrix call and just say so.
+      if (currentJobStatus === 'arrived') {
+        etaEl.textContent = 'Your technician is on site.';
+        return;
+      }
       distanceService.getDistanceMatrix({
         origins: [origin],
         destinations: [destination],

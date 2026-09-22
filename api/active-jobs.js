@@ -1,4 +1,5 @@
-// Returns every open job (status 'requested' or 'dispatched') for
+// Returns every open job (status 'requested', 'dispatched', 'en_route',
+// or 'arrived' -- i.e. anything not yet completed/cancelled) for
 // tech.html's job list/detail view -- including the customer's name and
 // phone number, joined server-side with the service-role key. This
 // replaces tech.html's previous direct anon-key read of
@@ -35,7 +36,7 @@ module.exports = async (req, res) => {
     }
 
     const url = `${SUPABASE_URL}/rest/v1/jobs` +
-      `?status=in.(requested,dispatched)` +
+      `?status=in.(requested,dispatched,en_route,arrived)` +
       `&select=id,service_type,price,status,payment_status,created_at,customer_lat,customer_lng,customer_address,customers(name,phone)` +
       `&order=created_at.asc`;
 

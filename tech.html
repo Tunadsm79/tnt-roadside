@@ -181,6 +181,8 @@
     }
     .job-badge.new { background: #7c2d12; color: #fed7aa; }
     .job-badge.accepted { background: #14532d; color: #86efac; }
+    .job-badge.en-route { background: #1e3a8a; color: #bfdbfe; }
+    .job-badge.arrived { background: #581c87; color: #e9d5ff; }
     .job-price { color: #2563EB; font-weight: 700; font-size: 16px; }
     .job-meta { font-size: 13px; color: #94a3b8; }
     .tracking-line {
@@ -383,6 +385,38 @@
       dead_battery: 'Dead Battery',
       lockout: 'Lockout',
       fuel_delivery: 'Fuel Delivery'
+    };
+
+    // Status lifecycle (besides 'requested', handled by the Accept flow,
+    // and 'completed'/'cancelled', which are terminal): dispatched (tech
+    // accepted) -> en_route (tech is on the way, customer notified) ->
+    // arrived (tech is on location, unlocks Complete). Cancel stays
+    // available at every one of these non-terminal stages.
+    const STATUS_BADGES = {
+      requested: { cls: 'new', label: 'New' },
+      dispatched: { cls: 'accepted', label: 'Accepted' },
+      en_route: { cls: 'en-route', label: 'En Route' },
+      arrived: { cls: 'arrived', label: 'On Site' }
+    };
+    // What the one primary action button says/does at each stage -- it's
+    // the same button element throughout (id="complete-btn"), its label,
+    // style, and click behavior just change with job.status.
+    const PRIMARY_BUTTON = {
+      dispatched: { label: "I'm En Route", action: 'en-route', cls: '' },
+      en_route: { label: "I've Arrived", action: 'arrived', cls: '' },
+      arrived: { label: 'Complete Job', action: 'complete', cls: 'success' }
+    };
+    const ACTION_ENDPOINTS = {
+      'en-route': '/api/en-route-job',
+      arrived: '/api/arrived-job',
+      complete: '/api/complete-job',
+      cancel: '/api/cancel-job'
+    };
+    const ACTION_LABELS = {
+      'en-route': { inProgress: 'Letting the customer know…', done: "Marked en route -- customer notified." },
+      arrived: { inProgress: 'Marking arrived…', done: "Marked arrived -- you can now complete the job." },
+      complete: { inProgress: 'Capturing payment...', done: 'Job completed -- payment captured.' },
+      cancel: { inProgress: 'Releasing hold...', done: 'Job cancelled -- hold released.' }
     };
 
     const pinScreen = document.getElementById('pin-screen');
@@ -694,12 +728,13 @@
       jobs.forEach(job => {
         const isNew = job.status === 'requested';
         const customer = customerOf(job);
+        const badge = STATUS_BADGES[job.status] || { cls: 'accepted', label: job.status };
 
         const item = document.createElement('div');
         item.className = 'job-card';
         item.innerHTML =
           '<div class="job-service">' + (SERVICE_LABELS[job.service_type] || job.service_type) +
-          '<span class="job-badge ' + (isNew ? 'new' : 'accepted') + '">' + (isNew ? 'New' : 'Accepted') + '</span></div>' +
+          '<span class="job-badge ' + badge.cls + '">' + badge.label + '</span></div>' +
           '<div class="job-price">' + formatPrice(job) + '</div>' +
           '<div class="job-meta">Dispatched ' + new Date(job.created_at).toLocaleTimeString() + '</div>' +
           (customer ? '<div class="job-meta">' + customer.name +
@@ -768,15 +803,21 @@
       cancelBtn.disabled = false;
 
       // A freshly-dispatched job needs an explicit Accept before the tech
-      // can complete/cancel it. Normally a job only reaches this detail
-      // view once already accepted (the list's Accept button handles that
-      // step first) -- this branch is just a defensive fallback.
+      // can do anything else with it. Normally a job only reaches this
+      // detail view once already accepted (the list's Accept button
+      // handles that step first) -- this branch is just a defensive
+      // fallback. Once accepted, the single primary button walks the tech
+      // through En Route -> Arrived -> Complete, with Cancel available at
+      // every one of those stages.
       if (job.status === 'requested') {
         acceptRow.classList.remove('hidden');
         jobActionsRow.classList.add('hidden');
       } else {
         acceptRow.classList.add('hidden');
         jobActionsRow.classList.remove('hidden');
+        const primary = PRIMARY_BUTTON[job.status] || PRIMARY_BUTTON.arrived;
+        completeBtn.textContent = primary.label;
+        completeBtn.className = primary.cls;
       }
     }
 
@@ -855,11 +896,21 @@
     // ---- Complete Job / Cancel Job -- these are the buttons that actually
     //      move money (capture the Stripe hold, or release it) ----
     completeBtn.addEventListener('click', () => {
+      if (!detailJob) return;
+      // This one button does different things at different stages of the
+      // job -- see PRIMARY_BUTTON above. Only the 'arrived' stage actually
+      // completes/captures payment; the earlier stages just move the
+      // status forward (and notify the customer).
+      const primary = PRIMARY_BUTTON[detailJob.status];
+      if (primary && primary.action !== 'complete') {
+        handleJobAction(primary.action);
+        return;
+      }
       // Flat-rate jobs (price already known) complete immediately, same
       // as before. After-hours jobs (price is null -- see showPrice() in
       // index.html) don't have a final amount yet, so ask the tech how
       // long the job actually took before capturing anything.
-      if (detailJob && detailJob.price == null) {
+      if (detailJob.price == null) {
         hoursInput.value = '1';
         updateHoursTotal();
         jobActionsRow.classList.add('hidden');
@@ -895,13 +946,14 @@
     async function handleJobAction(action, finalAmountCents) {
       if (!detailJob) return;
       const jobId = detailJob.id;
+      const isTerminal = action === 'complete' || action === 'cancel';
       completeBtn.disabled = true;
       cancelBtn.disabled = true;
       jobActionStatus.className = 'status';
-      jobActionStatus.textContent = action === 'complete' ? 'Capturing payment...' : 'Releasing hold...';
+      jobActionStatus.textContent = ACTION_LABELS[action].inProgress;
 
       try {
-        const endpoint = action === 'complete' ? '/api/complete-job' : '/api/cancel-job';
+        const endpoint = ACTION_ENDPOINTS[action];
         const body = { job_id: jobId };
         if (finalAmountCents != null) body.final_amount_cents = finalAmountCents;
         const response = await fetch(endpoint, {
@@ -913,15 +965,22 @@
         if (!response.ok) throw new Error(result.error || 'Request failed');
 
         jobActionStatus.className = 'status ok';
-        jobActionStatus.textContent = action === 'complete'
-          ? 'Job completed -- payment captured.'
-          : 'Job cancelled -- hold released.';
-        // This job is done -- it'll drop out of active_jobs_view on the
-        // next refresh. Head back to the list so any other pending jobs
-        // are visible right away instead of leaving a dead detail screen up.
-        openJobId = null;
-        detailJob = null;
-        setTimeout(refreshJobs, 1200);
+        jobActionStatus.textContent = ACTION_LABELS[action].done;
+
+        if (isTerminal) {
+          // This job is done (completed) or dead (cancelled) -- it'll
+          // drop out of active_jobs_view on the next refresh. Head back
+          // to the list so any other pending jobs are visible right away
+          // instead of leaving a dead detail screen up.
+          openJobId = null;
+          detailJob = null;
+          setTimeout(refreshJobs, 1200);
+        } else {
+          // En route / arrived: still the same open job, just moved
+          // forward a stage. Refresh right away so the detail view (and
+          // its primary button's label) updates to match the new status.
+          await refreshJobs();
+        }
       } catch (err) {
         console.error(action + ' failed:', err);
         jobActionStatus.className = 'status error';

@@ -3,6 +3,11 @@
 // job + payment records to match. Called from tech.html's "Complete Job"
 // button.
 //
+// Only allowed once the job is marked 'arrived' -- the tech has to
+// actually be on location (see arrived-job.js) before the card can be
+// charged. This used to allow completing from any non-terminal status;
+// tightened so a job can't be captured before the tech is on site.
+//
 // Uses the Supabase SERVICE ROLE key (server-side only, never sent to the
 // browser) instead of the public anon key, because this function needs to
 // read the jobs/payments tables and write to them directly -- neither is
@@ -73,8 +78,8 @@ module.exports = async (req, res) => {
       res.status(404).json({ error: 'Job not found' });
       return;
     }
-    if (job.status === 'completed' || job.status === 'cancelled') {
-      res.status(400).json({ error: `Job is already ${job.status}` });
+    if (job.status !== 'arrived') {
+      res.status(400).json({ error: `Job is ${job.status} -- mark it arrived before completing it` });
       return;
     }
 
