@@ -124,8 +124,34 @@
       color: #64748b;
     }
     #location-screen { width: 100%; }
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+    .top-actions button {
+      padding: 10px;
+      font-size: 13px;
+    }
     #job-section { width: 100%; margin-top: 24px; }
     .no-job { color: #64748b; font-size: 14px; }
+    #history-view { width: 100%; text-align: left; }
+    #history-back-btn { width: auto; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
+    .history-summary {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .history-total { font-size: 22px; font-weight: 800; color: #4ade80; }
+    #history-list {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
     #job-list {
       width: 100%;
       display: flex;
@@ -275,51 +301,68 @@
     </div>
 
     <div id="location-screen" class="hidden">
-      <p class="sub">Tap to share your current location. Customers see this as your live ETA.</p>
-      <button id="update-btn">Update My Location</button>
-      <div class="status" id="location-status"></div>
-      <div class="location-line" id="last-updated"></div>
+      <div class="top-actions">
+        <button class="secondary" id="history-btn">Completed Jobs</button>
+        <button class="secondary" id="logout-btn">Log Out</button>
+      </div>
 
-      <div id="job-section">
-        <div id="job-loading" class="no-job">Checking for active jobs...</div>
-        <div id="no-job-message" class="no-job hidden">No active job right now.</div>
+      <div id="normal-view">
+        <p class="sub">Tap to share your current location. Customers see this as your live ETA.</p>
+        <button id="update-btn">Update My Location</button>
+        <div class="status" id="location-status"></div>
+        <div class="location-line" id="last-updated"></div>
 
-        <!-- List of every open job (requested or accepted) when none is
-             currently drilled into. Populated by renderList() below. -->
-        <div id="job-list" class="hidden"></div>
-        <div class="status error hidden" id="list-status"></div>
+        <div id="job-section">
+          <div id="job-loading" class="no-job">Checking for active jobs...</div>
+          <div id="no-job-message" class="no-job hidden">No active job right now.</div>
 
-        <!-- Detail view for whichever single job is currently open. -->
-        <div id="job-card" class="job-card hidden">
-          <button class="secondary" id="back-to-list-btn">&larr; Back to list</button>
-          <div class="job-service" id="job-service"></div>
-          <div class="job-price" id="job-price"></div>
-          <div class="job-meta" id="job-meta"></div>
-          <div class="job-address" id="job-address"></div>
-          <a href="#" target="_blank" rel="noopener" class="job-directions hidden" id="job-directions">Get Directions</a>
-          <div class="tracking-line hidden" id="tracking-indicator">
-            <span class="tracking-dot"></span>Sharing your live location with the customer
-          </div>
-          <div id="hours-entry" class="hours-entry hidden">
-            <label for="hours-input">After-hours job — hours worked (billed $125/hr)</label>
-            <div class="hours-row">
-              <input type="number" id="hours-input" min="0.5" step="0.5" value="1">
-              <span id="hours-total">$125.00</span>
+          <!-- List of every open job (requested or accepted) when none is
+               currently drilled into. Populated by renderList() below. -->
+          <div id="job-list" class="hidden"></div>
+          <div class="status error hidden" id="list-status"></div>
+
+          <!-- Detail view for whichever single job is currently open. -->
+          <div id="job-card" class="job-card hidden">
+            <button class="secondary" id="back-to-list-btn">&larr; Back to list</button>
+            <div class="job-service" id="job-service"></div>
+            <div class="job-price" id="job-price"></div>
+            <div class="job-meta" id="job-meta"></div>
+            <div class="job-meta" id="job-customer"></div>
+            <div class="job-address" id="job-address"></div>
+            <a href="#" target="_blank" rel="noopener" class="job-directions hidden" id="job-directions">Get Directions</a>
+            <div class="tracking-line hidden" id="tracking-indicator">
+              <span class="tracking-dot"></span>Sharing your live location with the customer
             </div>
-            <div class="hours-actions">
-              <button id="hours-confirm-btn" class="success">Confirm &amp; Complete</button>
-              <button id="hours-cancel-btn" class="secondary">Back</button>
+            <div id="hours-entry" class="hours-entry hidden">
+              <label for="hours-input">After-hours job — hours worked (billed $125/hr)</label>
+              <div class="hours-row">
+                <input type="number" id="hours-input" min="0.5" step="0.5" value="1">
+                <span id="hours-total">$125.00</span>
+              </div>
+              <div class="hours-actions">
+                <button id="hours-confirm-btn" class="success">Confirm &amp; Complete</button>
+                <button id="hours-cancel-btn" class="secondary">Back</button>
+              </div>
             </div>
+            <div class="job-actions hidden" id="accept-row">
+              <button id="accept-btn" class="success">Accept Job</button>
+            </div>
+            <div class="job-actions" id="job-actions-row">
+              <button id="complete-btn" class="success">Complete Job</button>
+              <button id="cancel-btn" class="danger">Cancel Job</button>
+            </div>
+            <div class="status" id="job-action-status"></div>
           </div>
-          <div class="job-actions hidden" id="accept-row">
-            <button id="accept-btn" class="success">Accept Job</button>
-          </div>
-          <div class="job-actions" id="job-actions-row">
-            <button id="complete-btn" class="success">Complete Job</button>
-            <button id="cancel-btn" class="danger">Cancel Job</button>
-          </div>
-          <div class="status" id="job-action-status"></div>
         </div>
+      </div>
+
+      <!-- Completed-jobs history: a separate view, swapped in for
+           normal-view above rather than shown alongside it, to keep the
+           page simple (one thing on screen at a time). -->
+      <div id="history-view" class="hidden">
+        <button class="secondary" id="history-back-btn">&larr; Back</button>
+        <div class="history-summary" id="history-summary">Loading...</div>
+        <div id="history-list"></div>
       </div>
     </div>
   </div>
@@ -351,6 +394,14 @@
     const locationStatus = document.getElementById('location-status');
     const lastUpdated = document.getElementById('last-updated');
 
+    const normalView = document.getElementById('normal-view');
+    const historyView = document.getElementById('history-view');
+    const historyBtn = document.getElementById('history-btn');
+    const historyBackBtn = document.getElementById('history-back-btn');
+    const historySummary = document.getElementById('history-summary');
+    const historyListEl = document.getElementById('history-list');
+    const logoutBtn = document.getElementById('logout-btn');
+
     const jobLoading = document.getElementById('job-loading');
     const noJobMessage = document.getElementById('no-job-message');
     const jobListEl = document.getElementById('job-list');
@@ -360,6 +411,7 @@
     const jobService = document.getElementById('job-service');
     const jobPrice = document.getElementById('job-price');
     const jobMeta = document.getElementById('job-meta');
+    const jobCustomer = document.getElementById('job-customer');
     const jobAddress = document.getElementById('job-address');
     const jobDirections = document.getElementById('job-directions');
     const trackingIndicator = document.getElementById('tracking-indicator');
@@ -391,6 +443,7 @@
     let openJobId = null;
     let detailJob = null; // the job object currently rendered in the detail view
     const seenJobIds = new Set(); // used to detect genuinely NEW jobs for the sound/vibration alert
+    let pollIntervalId = null; // so Log Out can actually stop the 10s polling loop
     let watchId = null;
     let lastGpsWriteAt = 0;
     // Continuous GPS tracking (while a job is active) can fire many times a
@@ -556,19 +609,30 @@
       requestWakeLock();
       refreshJobs();
       // Catches newly-dispatched jobs while this page is left open.
-      setInterval(refreshJobs, 10000);
+      pollIntervalId = setInterval(refreshJobs, 10000);
+    }
+
+    // Pulls the customer object out of a job row, whichever shape
+    // PostgREST embedding returns it in (a single object for a to-one
+    // relationship, but defensively handling an array too).
+    function customerOf(job) {
+      const c = job.customers;
+      if (!c) return null;
+      return Array.isArray(c) ? (c[0] || null) : c;
     }
 
     async function refreshJobs() {
       try {
-        const { data, error } = await supabaseClient
-          .from('active_jobs_view')
-          .select('id, service_type, price, status, payment_status, created_at, customer_lat, customer_lng, customer_address')
-          .order('created_at', { ascending: true });
-        if (error) throw error;
+        // Goes through /api/active-jobs (service-role key, server-side)
+        // rather than a direct anon-key Supabase read -- this is what lets
+        // the job list also include the customer's name/phone without
+        // ever making `customers` readable by the public anon key.
+        const response = await fetch('/api/active-jobs');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
 
         jobLoading.classList.add('hidden');
-        jobs = data || [];
+        jobs = result.jobs || [];
 
         // Alert on any job id we haven't seen before -- not just "the"
         // one job like before, since several can be open at once now.
@@ -629,6 +693,7 @@
 
       jobs.forEach(job => {
         const isNew = job.status === 'requested';
+        const customer = customerOf(job);
 
         const item = document.createElement('div');
         item.className = 'job-card';
@@ -636,7 +701,10 @@
           '<div class="job-service">' + (SERVICE_LABELS[job.service_type] || job.service_type) +
           '<span class="job-badge ' + (isNew ? 'new' : 'accepted') + '">' + (isNew ? 'New' : 'Accepted') + '</span></div>' +
           '<div class="job-price">' + formatPrice(job) + '</div>' +
-          '<div class="job-meta">Dispatched ' + new Date(job.created_at).toLocaleTimeString() + '</div>';
+          '<div class="job-meta">Dispatched ' + new Date(job.created_at).toLocaleTimeString() + '</div>' +
+          (customer ? '<div class="job-meta">' + customer.name +
+            (customer.phone ? ' &middot; <a href="tel:' + customer.phone + '" style="color:#93c5fd;">' + customer.phone + '</a>' : '') +
+            '</div>' : '');
 
         const btn = document.createElement('button');
         btn.className = isNew ? 'success' : 'secondary';
@@ -664,6 +732,17 @@
       jobService.textContent = SERVICE_LABELS[job.service_type] || job.service_type;
       jobPrice.textContent = formatPrice(job);
       jobMeta.textContent = 'Dispatched ' + new Date(job.created_at).toLocaleTimeString();
+
+      // Who to actually call once you're there (or if the address is
+      // unclear) -- pulled server-side, see refreshJobs()/customerOf().
+      const jobCustomerData = customerOf(job);
+      if (jobCustomerData) {
+        jobCustomer.innerHTML = jobCustomerData.name +
+          (jobCustomerData.phone ? ' &middot; <a href="tel:' + jobCustomerData.phone + '" style="color:#93c5fd; font-weight:700;">' + jobCustomerData.phone + '</a>' : '');
+        jobCustomer.classList.remove('hidden');
+      } else {
+        jobCustomer.classList.add('hidden');
+      }
 
       // Where to actually go. A typed address is shown as-is and linked
       // straight to Maps directions; a GPS-based job has coordinates but
@@ -851,6 +930,85 @@
         cancelBtn.disabled = false;
       }
     }
+
+    // ---- Completed Jobs history: what's been done + the running total ----
+    async function loadHistory() {
+      historySummary.textContent = 'Loading…';
+      historyListEl.innerHTML = '';
+      try {
+        const response = await fetch('/api/job-history');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+
+        const completedJobs = result.jobs || [];
+        const total = completedJobs.reduce((sum, j) => sum + (Number(j.price) || 0), 0);
+        historySummary.innerHTML =
+          '<div class="history-total">$' + total.toFixed(2) + '</div>' +
+          '<div class="job-meta">' + completedJobs.length + ' completed job' + (completedJobs.length === 1 ? '' : 's') + '</div>';
+
+        if (completedJobs.length === 0) {
+          historyListEl.innerHTML = '<div class="no-job">No completed jobs yet.</div>';
+          return;
+        }
+
+        completedJobs.forEach(job => {
+          const customer = customerOf(job);
+          const item = document.createElement('div');
+          item.className = 'job-card';
+          item.innerHTML =
+            '<div class="job-service">' + (SERVICE_LABELS[job.service_type] || job.service_type) + '</div>' +
+            '<div class="job-price">$' + Number(job.price || 0).toFixed(2) + '</div>' +
+            '<div class="job-meta">Completed ' + new Date(job.completed_at).toLocaleString() + '</div>' +
+            (customer ? '<div class="job-meta">' + customer.name + (customer.phone ? ' &middot; ' + customer.phone : '') + '</div>' : '');
+          historyListEl.appendChild(item);
+        });
+      } catch (err) {
+        console.error('history failed:', err);
+        historySummary.innerHTML = '';
+        historyListEl.innerHTML = '<div class="no-job" style="color:#f87171;">Could not load job history: ' + err.message + '</div>';
+      }
+    }
+
+    historyBtn.addEventListener('click', () => {
+      normalView.classList.add('hidden');
+      historyView.classList.remove('hidden');
+      loadHistory();
+    });
+
+    historyBackBtn.addEventListener('click', () => {
+      historyView.classList.add('hidden');
+      normalView.classList.remove('hidden');
+    });
+
+    // ---- Log Out: locks the screen again and actually tears down
+    //      everything running in the background (polling, GPS tracking,
+    //      wake lock) rather than just hiding the UI ----
+    logoutBtn.addEventListener('click', () => {
+      sessionStorage.removeItem('tnt-tech-unlocked');
+
+      if (pollIntervalId !== null) {
+        clearInterval(pollIntervalId);
+        pollIntervalId = null;
+      }
+      stopContinuousTracking();
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+      }
+
+      jobs = [];
+      openJobId = null;
+      detailJob = null;
+      seenJobIds.clear();
+      firstJobCheck = true;
+
+      historyView.classList.add('hidden');
+      normalView.classList.remove('hidden');
+      pinInput.value = '';
+      pinStatus.textContent = '';
+      locationScreen.classList.add('hidden');
+      pinScreen.classList.remove('hidden');
+    });
   </script>
 
   <script>
