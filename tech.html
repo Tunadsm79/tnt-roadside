@@ -28,7 +28,7 @@
       text-align: center;
     }
     h1 { font-size: 22px; font-weight: 800; }
-    h1 span { color: #f97316; }
+    h1 span { color: #E01010; }
     p.sub { color: #94a3b8; font-size: 14px; }
     input[type="password"], input[type="tel"] {
       width: 100%;
@@ -46,11 +46,15 @@
       padding: 14px;
       border-radius: 10px;
       border: none;
-      background: #f97316;
-      color: #0f172a;
+      background: #2563EB;
+      color: #ffffff;
       font-size: 16px;
       font-weight: 700;
       cursor: pointer;
+    }
+    button.success {
+      background: #16a34a;
+      color: #ffffff;
     }
     button:disabled { opacity: 0.5; cursor: default; }
     button.secondary {
@@ -90,7 +94,7 @@
       gap: 8px;
     }
     .job-service { font-size: 18px; font-weight: 800; }
-    .job-price { color: #f97316; font-weight: 700; font-size: 16px; }
+    .job-price { color: #2563EB; font-weight: 700; font-size: 16px; }
     .job-meta { font-size: 13px; color: #94a3b8; }
     .tracking-line {
       font-size: 12px;
@@ -126,8 +130,8 @@
       text-decoration: none;
       padding: 10px;
       border-radius: 8px;
-      background: #f97316;
-      color: #0f172a;
+      background: #2563EB;
+      color: #ffffff;
       font-weight: 700;
       font-size: 14px;
     }
@@ -137,7 +141,7 @@
       gap: 12px;
       width: 100%;
       background: #1e293b;
-      border: 1px solid #f97316;
+      border: 1px solid #2563EB;
       border-radius: 12px;
       padding: 14px 16px;
       margin-bottom: 20px;
@@ -160,8 +164,8 @@
     .install-banner-btn {
       width: auto;
       flex-shrink: 0;
-      background: #f97316;
-      color: #0f172a;
+      background: #2563EB;
+      color: #ffffff;
       border: none;
       border-radius: 8px;
       padding: 8px 14px;
@@ -227,7 +231,7 @@
             <span class="tracking-dot"></span>Sharing your live location with the customer
           </div>
           <div class="job-actions">
-            <button id="complete-btn">Complete Job</button>
+            <button id="complete-btn" class="success">Complete Job</button>
             <button id="cancel-btn" class="danger">Cancel Job</button>
           </div>
           <div class="status" id="job-action-status"></div>
