@@ -321,6 +321,7 @@
     </div>
 
     <div id="location-screen" class="hidden">
+      <div class="job-meta" id="tech-name-label" style="margin-bottom: 8px;"></div>
       <div class="top-actions">
         <button class="secondary" id="history-btn">Completed Jobs</button>
         <button class="secondary" id="logout-btn">Log Out</button>
@@ -391,8 +392,12 @@
   <script>
     // Deliberately simple deterrent, not real security -- see project docs.
     // Anyone determined enough to read this page's source can find the PIN.
-    // Fine for now: single technician (Demian), page isn't linked publicly.
-    const TECH_PIN = '0214';
+    // Two technicians for now: Demian (also the admin PIN) and Jonathan.
+    // Page isn't linked publicly.
+    const TECH_PINS = {
+      '0214': 'Demian',
+      '2222': 'Jonathan'
+    };
 
     const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_UwjdR9XkwjTC8seuP5GXsA_QimEYwZ1';
@@ -505,8 +510,11 @@
     const GPS_WRITE_MIN_INTERVAL_MS = 5000;
 
     function unlock() {
-      if (pinInput.value === TECH_PIN) {
+      const techName = TECH_PINS[pinInput.value];
+      if (techName) {
         sessionStorage.setItem('tnt-tech-unlocked', '1');
+        sessionStorage.setItem('tnt-tech-name', techName);
+        document.getElementById('tech-name-label').textContent = 'Logged in as ' + techName;
         pinScreen.classList.add('hidden');
         locationScreen.classList.remove('hidden');
         startJobPolling();
@@ -526,6 +534,8 @@
     if (sessionStorage.getItem('tnt-tech-unlocked') === '1') {
       pinScreen.classList.add('hidden');
       locationScreen.classList.remove('hidden');
+      document.getElementById('tech-name-label').textContent =
+        'Logged in as ' + (sessionStorage.getItem('tnt-tech-name') || 'Demian');
       startJobPolling();
     }
 
@@ -1062,6 +1072,7 @@
     //      wake lock) rather than just hiding the UI ----
     logoutBtn.addEventListener('click', () => {
       sessionStorage.removeItem('tnt-tech-unlocked');
+      sessionStorage.removeItem('tnt-tech-name');
 
       if (pollIntervalId !== null) {
         clearInterval(pollIntervalId);
