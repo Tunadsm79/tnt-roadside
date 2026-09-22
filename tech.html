@@ -508,16 +508,45 @@
     // Supabase or burn data. 5s is frequent enough for a live-feeling
     // customer ETA without writing on every single GPS event.
     const GPS_WRITE_MIN_INTERVAL_MS = 5000;
+    // Which technician row (by name) this browser tab's writes belong to
+    // -- set on unlock, read by pushLocation()/setDutyStatus() below, so
+    // Demian's and Jonathan's updates each land on their own row instead
+    // of both hitting whichever single row used to be "the" technician.
+    let currentTechName = null;
+
+    // Tells admin.html whether this tech is currently on shift. Fired
+    // immediately on login/logout (not throttled like GPS writes) --
+    // being a moment late showing "on duty" is fine, being wrong for
+    // minutes because it's batched with a GPS tick is not.
+    async function setDutyStatus(onDuty) {
+      if (!currentTechName) return;
+      try {
+        const response = await fetch('/api/tech-heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tech_name: currentTechName, on_duty: onDuty })
+        });
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          console.error('setDutyStatus failed:', result.error || response.status);
+        }
+      } catch (err) {
+        console.error('setDutyStatus failed:', err);
+      }
+    }
 
     function unlock() {
       const techName = TECH_PINS[pinInput.value];
       if (techName) {
         sessionStorage.setItem('tnt-tech-unlocked', '1');
         sessionStorage.setItem('tnt-tech-name', techName);
+        currentTechName = techName;
         document.getElementById('tech-name-label').textContent = 'Logged in as ' + techName;
         pinScreen.classList.add('hidden');
         locationScreen.classList.remove('hidden');
+        setDutyStatus(true);
         startJobPolling();
+        startContinuousTracking();
       } else {
         pinStatus.textContent = 'Wrong PIN.';
         pinInput.value = '';
@@ -534,23 +563,26 @@
     if (sessionStorage.getItem('tnt-tech-unlocked') === '1') {
       pinScreen.classList.add('hidden');
       locationScreen.classList.remove('hidden');
-      document.getElementById('tech-name-label').textContent =
-        'Logged in as ' + (sessionStorage.getItem('tnt-tech-name') || 'Demian');
+      currentTechName = sessionStorage.getItem('tnt-tech-name') || 'Demian';
+      document.getElementById('tech-name-label').textContent = 'Logged in as ' + currentTechName;
+      setDutyStatus(true);
       startJobPolling();
+      startContinuousTracking();
     }
 
     // ---- shared location push (used by both the manual button and the
     //      automatic continuous tracking below) ----
     async function pushLocation(latitude, longitude) {
-      const { error } = await supabaseClient
-        .from('technicians')
-        .update({
-          current_lat: latitude,
-          current_lng: longitude,
-          location_updated_at: new Date().toISOString()
-        })
-        .eq('active', true);
-      if (error) throw error;
+      if (!currentTechName) return;
+      const response = await fetch('/api/tech-heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tech_name: currentTechName, lat: latitude, lng: longitude })
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || 'Location update failed');
+      }
     }
 
     updateBtn.addEventListener('click', () => {
@@ -703,15 +735,10 @@
         jobs.forEach(j => seenJobIds.add(j.id));
         firstJobCheck = false;
 
-        // Technician location only needs to keep updating while at least
-        // one job is actually accepted (in progress) -- not just for jobs
-        // still sitting unaccepted in the queue.
-        const hasInProgressJob = jobs.some(j => j.status !== 'requested');
-        if (hasInProgressJob) {
-          startContinuousTracking();
-        } else {
-          stopContinuousTracking();
-        }
+        // Continuous GPS tracking now runs for the whole shift (started at
+        // login, stopped at logout -- see unlock()/logoutBtn below), not
+        // just while a job happens to be in progress, so there's nothing
+        // to start/stop here based on job status anymore.
 
         if (jobs.length === 0) {
           openJobId = null;
@@ -1071,8 +1098,10 @@
     //      everything running in the background (polling, GPS tracking,
     //      wake lock) rather than just hiding the UI ----
     logoutBtn.addEventListener('click', () => {
+      setDutyStatus(false);
       sessionStorage.removeItem('tnt-tech-unlocked');
       sessionStorage.removeItem('tnt-tech-name');
+      currentTechName = null;
 
       if (pollIntervalId !== null) {
         clearInterval(pollIntervalId);

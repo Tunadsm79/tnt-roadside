@@ -158,6 +158,49 @@
     .job-price { color: #2563EB; font-weight: 700; font-size: 14px; }
     .job-meta { font-size: 12px; color: #94a3b8; }
     .no-jobs { color: #64748b; font-size: 14px; padding: 20px 0; text-align: center; width: 100%; }
+    .tech-section {
+      width: 100%;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .tech-section-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+    .tech-map {
+      width: 100%;
+      height: 200px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      background: #0f172a;
+    }
+    .tech-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 0;
+      border-top: 1px solid #334155;
+    }
+    .tech-row:first-of-type { border-top: none; }
+    .tech-name { font-size: 14px; font-weight: 700; }
+    .tech-meta { font-size: 12px; color: #64748b; margin-top: 2px; }
+    .tech-pill {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 999px;
+      flex-shrink: 0;
+    }
+    .tech-pill.on { background: #14532d; color: #86efac; }
+    .tech-pill.off { background: #334155; color: #94a3b8; }
     .install-banner {
       display: none;
       align-items: center;
@@ -241,6 +284,12 @@
         <button class="secondary" id="logout-btn">Log Out</button>
       </div>
 
+      <div class="tech-section" id="tech-section">
+        <div class="tech-section-title">Technicians</div>
+        <div id="tech-map" class="tech-map"></div>
+        <div id="tech-list">Loading&hellip;</div>
+      </div>
+
       <div class="summary-strip" id="summary-strip">Loading&hellip;</div>
 
       <div class="filter-row" id="filter-row">
@@ -254,6 +303,18 @@
       <div id="job-list"></div>
     </div>
   </div>
+
+  <!-- Loads Google's map code so the Techs section can show on-duty
+       locations. Same key/restriction as index.html and tech.html. -->
+  <script>
+    // Defined before the Maps script tag on purpose -- see index.html
+    // for why (Maps sometimes calls this before it exists otherwise).
+    let lastTechData = null;
+    function initMaps() {
+      if (lastTechData) updateTechMap(lastTechData);
+    }
+  </script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZEELZJOoritTGoNx44ajUfsYdUNa8vAM&callback=initMaps&loading=async" async defer></script>
 
   <script>
     // Same deliberate simple-deterrent pattern as tech.html's PIN --
@@ -291,16 +352,23 @@
     const filterRow = document.getElementById('filter-row');
     const dashboardStatus = document.getElementById('dashboard-status');
     const jobListEl = document.getElementById('job-list');
+    const techMapEl = document.getElementById('tech-map');
+    const techListEl = document.getElementById('tech-list');
 
     let allJobs = [];
     let currentFilter = 'all';
+    let techMap = null;
+    const techMarkers = {}; // tech name -> google.maps.Marker
+    let techPollInterval = null;
+    const TECH_POLL_MS = 15000;
 
     function unlock() {
       if (pinInput.value === ADMIN_PIN) {
         sessionStorage.setItem('tnt-admin-unlocked', '1');
         pinScreen.classList.add('hidden');
         dashboardScreen.classList.remove('hidden');
-        loadJobs();
+        refreshAll();
+        startTechPolling();
       } else {
         pinStatus.textContent = 'Wrong PIN.';
         pinInput.value = '';
@@ -312,7 +380,8 @@
     if (sessionStorage.getItem('tnt-admin-unlocked') === '1') {
       pinScreen.classList.add('hidden');
       dashboardScreen.classList.remove('hidden');
-      loadJobs();
+      refreshAll();
+      startTechPolling();
     }
 
     logoutBtn.addEventListener('click', () => {
@@ -322,9 +391,120 @@
       pinStatus.textContent = '';
       dashboardScreen.classList.add('hidden');
       pinScreen.classList.remove('hidden');
+      stopTechPolling();
     });
 
-    refreshBtn.addEventListener('click', loadJobs);
+    refreshBtn.addEventListener('click', refreshAll);
+
+    function refreshAll() {
+      loadJobs();
+      loadTechStatus();
+    }
+
+    function startTechPolling() {
+      if (techPollInterval) return;
+      techPollInterval = setInterval(loadTechStatus, TECH_POLL_MS);
+    }
+    function stopTechPolling() {
+      if (techPollInterval) {
+        clearInterval(techPollInterval);
+        techPollInterval = null;
+      }
+    }
+
+    function relativeTime(isoString) {
+      if (!isoString) return 'no location yet';
+      const diffMs = Date.now() - new Date(isoString).getTime();
+      const mins = Math.round(diffMs / 60000);
+      if (mins < 1) return 'just now';
+      if (mins === 1) return '1 min ago';
+      if (mins < 60) return mins + ' min ago';
+      const hours = Math.round(mins / 60);
+      if (hours === 1) return '1 hour ago';
+      if (hours < 24) return hours + ' hours ago';
+      const days = Math.round(hours / 24);
+      return days + (days === 1 ? ' day ago' : ' days ago');
+    }
+
+    async function loadTechStatus() {
+      try {
+        const response = await fetch('/api/tech-status');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        renderTechs(result.technicians || []);
+      } catch (err) {
+        console.error('loadTechStatus failed:', err);
+        techListEl.innerHTML = '<div class="no-jobs">Could not load technician status.</div>';
+      }
+    }
+
+    function renderTechs(technicians) {
+      lastTechData = technicians;
+      techListEl.innerHTML = '';
+      if (technicians.length === 0) {
+        techListEl.innerHTML = '<div class="no-jobs">No technicians on file.</div>';
+      } else {
+        technicians.forEach(tech => {
+          const row = document.createElement('div');
+          row.className = 'tech-row';
+          row.innerHTML =
+            '<div>' +
+              '<div class="tech-name">' + tech.name + '</div>' +
+              '<div class="tech-meta">' + (tech.on_duty ? 'Updated ' + relativeTime(tech.location_updated_at) : 'Off duty') + '</div>' +
+            '</div>' +
+            '<span class="tech-pill ' + (tech.on_duty ? 'on' : 'off') + '">' + (tech.on_duty ? 'On Duty' : 'Off Duty') + '</span>';
+          techListEl.appendChild(row);
+        });
+      }
+      updateTechMap(technicians);
+    }
+
+    function updateTechMap(technicians) {
+      if (!techMapEl || !window.google || !google.maps) return;
+
+      const onDutyWithLocation = technicians.filter(
+        t => t.on_duty && t.current_lat != null && t.current_lng != null
+      );
+
+      if (!techMap) {
+        techMap = new google.maps.Map(techMapEl, {
+          center: { lat: 30.3674, lng: -89.0928 }, // Gulfport, MS -- default view before any tech has reported in
+          zoom: 11,
+          disableDefaultUI: true,
+          zoomControl: true,
+        });
+      }
+
+      // Drop markers for techs who are no longer on duty (or gone).
+      Object.keys(techMarkers).forEach(name => {
+        if (!onDutyWithLocation.find(t => t.name === name)) {
+          techMarkers[name].setMap(null);
+          delete techMarkers[name];
+        }
+      });
+
+      onDutyWithLocation.forEach(tech => {
+        const position = { lat: tech.current_lat, lng: tech.current_lng };
+        if (techMarkers[tech.name]) {
+          techMarkers[tech.name].setPosition(position);
+        } else {
+          techMarkers[tech.name] = new google.maps.Marker({
+            position,
+            map: techMap,
+            title: tech.name,
+          });
+        }
+      });
+
+      if (onDutyWithLocation.length === 1) {
+        techMap.setCenter({ lat: onDutyWithLocation[0].current_lat, lng: onDutyWithLocation[0].current_lng });
+        techMap.setZoom(13);
+      } else if (onDutyWithLocation.length > 1) {
+        const bounds = new google.maps.LatLngBounds();
+        onDutyWithLocation.forEach(t => bounds.extend({ lat: t.current_lat, lng: t.current_lng }));
+        techMap.fitBounds(bounds, 48);
+      }
+    }
 
     filterRow.addEventListener('click', (e) => {
       const btn = e.target.closest('.filter-btn');
