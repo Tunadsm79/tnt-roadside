@@ -279,6 +279,9 @@
               <button id="hours-cancel-btn" class="secondary">Back</button>
             </div>
           </div>
+          <div class="job-actions hidden" id="accept-row">
+            <button id="accept-btn" class="success">Accept Job</button>
+          </div>
           <div class="job-actions" id="job-actions-row">
             <button id="complete-btn" class="success">Complete Job</button>
             <button id="cancel-btn" class="danger">Cancel Job</button>
@@ -329,6 +332,8 @@
     const cancelBtn = document.getElementById('cancel-btn');
     const jobActionStatus = document.getElementById('job-action-status');
     const jobActionsRow = document.getElementById('job-actions-row');
+    const acceptRow = document.getElementById('accept-row');
+    const acceptBtn = document.getElementById('accept-btn');
     const hoursEntry = document.getElementById('hours-entry');
     const hoursInput = document.getElementById('hours-input');
     const hoursTotal = document.getElementById('hours-total');
@@ -562,6 +567,21 @@
           jobDirections.classList.add('hidden');
         }
 
+        // A freshly-dispatched job needs an explicit Accept before the
+        // tech can complete/cancel it -- makes sure a human actually saw
+        // and acknowledged it (paired with the sound/vibration alert
+        // above), rather than it just silently sitting there. 'requested'
+        // = not yet accepted; anything else ('dispatched', etc.) = tech
+        // already accepted it, show the normal complete/cancel actions.
+        if (job.status === 'requested') {
+          acceptRow.classList.remove('hidden');
+          jobActionsRow.classList.add('hidden');
+          hoursEntry.classList.add('hidden');
+        } else {
+          acceptRow.classList.add('hidden');
+          jobActionsRow.classList.remove('hidden');
+        }
+
         if (isNewJob) startContinuousTracking();
       } catch (err) {
         console.error('refreshActiveJob failed:', err);
@@ -616,6 +636,36 @@
       handleJobAction('complete');
     });
     cancelBtn.addEventListener('click', () => handleJobAction('cancel'));
+
+    acceptBtn.addEventListener('click', async () => {
+      if (!currentJob) return;
+      acceptBtn.disabled = true;
+      acceptBtn.textContent = 'Accepting…';
+      try {
+        const response = await fetch('/api/accept-job', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: currentJob.id })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        // Refresh right away so the complete/cancel buttons swap in
+        // immediately instead of waiting for the next 10-second poll.
+        // Deliberately NOT clearing currentJob first -- refreshActiveJob
+        // compares against it to decide isNewJob, and this is the same
+        // job (just a status change), so clearing it would wrongly
+        // re-fire the new-job sound/vibration alert on the tech's own
+        // accept tap.
+        await refreshActiveJob();
+      } catch (err) {
+        console.error('accept failed:', err);
+        jobActionStatus.className = 'status error';
+        jobActionStatus.textContent = 'Could not accept job: ' + err.message;
+      } finally {
+        acceptBtn.disabled = false;
+        acceptBtn.textContent = 'Accept Job';
+      }
+    });
 
     function updateHoursTotal() {
       const hours = Math.max(0.5, parseFloat(hoursInput.value) || 0.5);

@@ -679,6 +679,31 @@
     let techMarker = null;
     let destMarker = null;
 
+    // Which job this browser tab is currently tracking, and whether the
+    // technician has actually tapped "Accept" on it yet (tech.html) --
+    // used so this screen can tell the customer the truth instead of
+    // claiming "on the way" the instant they submit, before anyone has
+    // actually confirmed they're coming.
+    let currentJobId = null;
+    let currentJobStatus = 'requested';
+
+    async function fetchJobStatus(jobId) {
+      try {
+        const { data, error } = await supabaseClient
+          .from('active_jobs_view')
+          .select('status')
+          .eq('id', jobId)
+          .maybeSingle();
+        if (error) throw error;
+        // null here means the job fell out of active_jobs_view entirely
+        // (completed/cancelled) -- distinct from a fetch failure below.
+        return data ? data.status : null;
+      } catch (err) {
+        console.error('Could not fetch job status:', err);
+        return undefined; // undefined = fetch failed, leave display as-is
+      }
+    }
+
     // Creates the live map the first time we have a real technician
     // position, then just moves the marker / re-centers on every poll
     // after that -- Maps needs the container visible with real size
@@ -760,9 +785,16 @@
       const etaEl = document.getElementById('tracking-eta');
       const updatedEl = document.getElementById('tracking-updated');
 
-      nameEl.textContent = technician.name
-        ? `${technician.name} has been notified and is on the way.`
-        : 'Your technician has been notified and is on the way.';
+      // Only claim someone's actually "on the way" once the tech has
+      // tapped Accept on tech.html -- before that, be honest that we're
+      // still waiting on a human to confirm, not just software matching.
+      if (currentJobStatus === 'requested') {
+        nameEl.textContent = "We've sent this to your nearest technician — waiting for them to confirm.";
+      } else {
+        nameEl.textContent = technician.name
+          ? `${technician.name} has accepted your job and is on the way.`
+          : 'Your technician has accepted your job and is on the way.';
+      }
 
       if (technician.location_updated_at) {
         const updated = new Date(technician.location_updated_at);
@@ -792,11 +824,16 @@
     }
 
     function startTracking(destination, technician) {
+      currentJobStatus = 'requested'; // always true the instant a dispatch succeeds
       showScreen('tracking');
       updateTrackingDisplay(destination, technician);
       stopTracking();
       trackingInterval = setInterval(async () => {
         const fresh = await fetchActiveTechnician();
+        if (currentJobId) {
+          const status = await fetchJobStatus(currentJobId);
+          if (status !== undefined) currentJobStatus = status;
+        }
         if (fresh) updateTrackingDisplay(destination, fresh);
       }, TRACKING_POLL_MS);
     }
@@ -835,6 +872,7 @@
       // unreadable to it.
       const customerId = crypto.randomUUID();
       const jobId = crypto.randomUUID();
+      currentJobId = jobId; // so the tracking screen can poll this job's accept status
 
       const lat = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lat : null;
       const lng = (currentDestination && typeof currentDestination === 'object') ? currentDestination.lng : null;
