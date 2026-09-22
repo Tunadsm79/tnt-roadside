@@ -841,6 +841,22 @@
 
       const technician = await fetchActiveTechnician();
 
+      // Don't take a customer's money (or falsely tell them help is on
+      // the way) if there's no technician actually available to send --
+      // this matters a lot right now specifically, since there's only
+      // one technician in the whole system. Stop here, before Stripe or
+      // Supabase are ever touched, so nothing gets charged and no job
+      // gets created for a dispatch that can't actually happen.
+      if (!technician) {
+        btn.disabled = false;
+        btn.textContent = 'Confirm Dispatch';
+        statusEl.style.display = 'block';
+        statusEl.innerHTML =
+          `<strong>No technician is available right now.</strong><br>` +
+          `Please call us directly so we can help another way — your card has not been charged.`;
+        return;
+      }
+
       // Amount to place on hold right now. After-hours jobs don't have a
       // final price yet (billed hourly once the job wraps up), so we
       // authorize the full $AFTER_HOURS_HOLD_HOURS-hour ceiling as a safety
@@ -926,14 +942,10 @@
 
         document.getElementById('dispatch-form').style.display = 'none';
 
-        if (technician) {
-          startTracking(currentDestination, technician);
-        } else {
-          statusEl.style.display = 'block';
-          statusEl.innerHTML =
-            `<strong>Dispatch confirmed!</strong><br>A technician has been notified and is on the way. ` +
-            `We'll call ${phone} if we need anything else.`;
-        }
+        // technician is always truthy here -- we already returned early
+        // above if fetchActiveTechnician() came back empty, before ever
+        // authorizing a card.
+        startTracking(currentDestination, technician);
       } catch (err) {
         console.error('Dispatch failed:', err);
         btn.disabled = false;
