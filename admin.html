@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>T&amp;T Roadside &mdash; Admin</title>
+  <meta name="robots" content="noindex, nofollow">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 48px;
+    }
+    .card {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-items: center;
+      text-align: center;
+    }
+    h1 { font-size: 22px; font-weight: 800; }
+    h1 span { color: #E01010; }
+    p.sub { color: #94a3b8; font-size: 14px; }
+    input[type="password"] {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: #f8fafc;
+      font-size: 18px;
+      text-align: center;
+      letter-spacing: 4px;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: none;
+      background: #2563EB;
+      color: #ffffff;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      border: 1px solid #334155;
+      color: #94a3b8;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .status {
+      font-size: 14px;
+      color: #94a3b8;
+      min-height: 20px;
+    }
+    .status.error { color: #f87171; }
+    .hidden { display: none !important; }
+    #dashboard-screen { width: 100%; text-align: left; }
+
+    .top-row {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      margin-bottom: 16px;
+    }
+    .top-row button { padding: 10px; font-size: 13px; }
+
+    .summary-strip {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      width: 100%;
+    }
+    .summary-total { font-size: 26px; font-weight: 800; color: #4ade80; }
+    .summary-sub { font-size: 13px; color: #94a3b8; margin-top: 2px; }
+    .status-counts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .status-count {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+    .status-count strong { color: #f8fafc; }
+
+    .filter-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      width: 100%;
+      margin-bottom: 16px;
+    }
+    .filter-btn {
+      width: auto;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      background: transparent;
+      border: 1px solid #334155;
+      color: #94a3b8;
+    }
+    .filter-btn.active {
+      background: #2563EB;
+      border-color: #2563EB;
+      color: #ffffff;
+    }
+
+    #job-list {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .job-card {
+      width: 100%;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 14px 16px;
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .job-service { font-size: 16px; font-weight: 800; }
+    .job-badge {
+      display: inline-block;
+      margin-left: 8px;
+      vertical-align: middle;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .job-badge.requested { background: #7c2d12; color: #fed7aa; }
+    .job-badge.dispatched { background: #14532d; color: #86efac; }
+    .job-badge.en_route { background: #1e3a8a; color: #bfdbfe; }
+    .job-badge.arrived { background: #581c87; color: #e9d5ff; }
+    .job-badge.completed { background: #14532d; color: #4ade80; }
+    .job-badge.cancelled { background: #3f1d1d; color: #f87171; }
+    .job-price { color: #2563EB; font-weight: 700; font-size: 14px; }
+    .job-meta { font-size: 12px; color: #94a3b8; }
+    .no-jobs { color: #64748b; font-size: 14px; padding: 20px 0; text-align: center; width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>T&amp;T <span>Roadside</span> &mdash; Admin</h1>
+
+    <div id="pin-screen">
+      <p class="sub">Admin dashboard &mdash; owner access only</p>
+      <input type="password" id="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="PIN">
+      <div class="status error" id="pin-status"></div>
+      <button id="pin-submit">Unlock</button>
+    </div>
+
+    <div id="dashboard-screen" class="hidden">
+      <div class="top-row">
+        <button class="secondary" id="refresh-btn">&#8635; Refresh</button>
+        <button class="secondary" id="logout-btn">Log Out</button>
+      </div>
+
+      <div class="summary-strip" id="summary-strip">Loading&hellip;</div>
+
+      <div class="filter-row" id="filter-row">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="active">Active</button>
+        <button class="filter-btn" data-filter="completed">Completed</button>
+        <button class="filter-btn" data-filter="cancelled">Cancelled</button>
+      </div>
+
+      <div class="status error hidden" id="dashboard-status"></div>
+      <div id="job-list"></div>
+    </div>
+  </div>
+
+  <script>
+    // Same deliberate simple-deterrent pattern as tech.html's PIN --
+    // not real security, see project docs. Reuses tech.html's PIN
+    // since right now Demian is both the technician and the owner --
+    // one fewer PIN to remember. Change this independently any time.
+    const ADMIN_PIN = '0214';
+
+    const SERVICE_LABELS = {
+      flat_tire: 'Flat Tire',
+      dead_battery: 'Dead Battery',
+      lockout: 'Lockout',
+      fuel_delivery: 'Fuel Delivery'
+    };
+    const STATUS_LABELS = {
+      requested: 'Requested',
+      dispatched: 'Accepted',
+      en_route: 'En Route',
+      arrived: 'On Site',
+      completed: 'Completed',
+      cancelled: 'Cancelled'
+    };
+    const ACTIVE_STATUSES = ['requested', 'dispatched', 'en_route', 'arrived'];
+    const AFTER_HOURS_RATE = 125;
+    const AFTER_HOURS_HOLD_HOURS = 3;
+
+    const pinScreen = document.getElementById('pin-screen');
+    const pinInput = document.getElementById('pin-input');
+    const pinStatus = document.getElementById('pin-status');
+    const pinSubmit = document.getElementById('pin-submit');
+    const dashboardScreen = document.getElementById('dashboard-screen');
+    const refreshBtn = document.getElementById('refresh-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const summaryStrip = document.getElementById('summary-strip');
+    const filterRow = document.getElementById('filter-row');
+    const dashboardStatus = document.getElementById('dashboard-status');
+    const jobListEl = document.getElementById('job-list');
+
+    let allJobs = [];
+    let currentFilter = 'all';
+
+    function unlock() {
+      if (pinInput.value === ADMIN_PIN) {
+        sessionStorage.setItem('tnt-admin-unlocked', '1');
+        pinScreen.classList.add('hidden');
+        dashboardScreen.classList.remove('hidden');
+        loadJobs();
+      } else {
+        pinStatus.textContent = 'Wrong PIN.';
+        pinInput.value = '';
+      }
+    }
+    pinSubmit.addEventListener('click', unlock);
+    pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') unlock(); });
+
+    if (sessionStorage.getItem('tnt-admin-unlocked') === '1') {
+      pinScreen.classList.add('hidden');
+      dashboardScreen.classList.remove('hidden');
+      loadJobs();
+    }
+
+    logoutBtn.addEventListener('click', () => {
+      sessionStorage.removeItem('tnt-admin-unlocked');
+      allJobs = [];
+      pinInput.value = '';
+      pinStatus.textContent = '';
+      dashboardScreen.classList.add('hidden');
+      pinScreen.classList.remove('hidden');
+    });
+
+    refreshBtn.addEventListener('click', loadJobs);
+
+    filterRow.addEventListener('click', (e) => {
+      const btn = e.target.closest('.filter-btn');
+      if (!btn) return;
+      currentFilter = btn.dataset.filter;
+      filterRow.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b === btn));
+      renderList();
+    });
+
+    function customerOf(job) {
+      const c = job.customers;
+      if (!c) return null;
+      return Array.isArray(c) ? (c[0] || null) : c;
+    }
+
+    function formatPrice(job) {
+      if (job.price != null) return '$' + Number(job.price).toFixed(2);
+      if (job.status === 'completed') return '$0.00'; // shouldn't normally happen
+      return 'Up to $' + (AFTER_HOURS_RATE * AFTER_HOURS_HOLD_HOURS).toFixed(2) + ' held';
+    }
+
+    async function loadJobs() {
+      dashboardStatus.classList.add('hidden');
+      summaryStrip.textContent = 'Loading…';
+      try {
+        const response = await fetch('/api/all-jobs');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        allJobs = result.jobs || [];
+        renderSummary();
+        renderList();
+      } catch (err) {
+        console.error('loadJobs failed:', err);
+        summaryStrip.textContent = '';
+        dashboardStatus.classList.remove('hidden');
+        dashboardStatus.textContent = 'Could not load jobs: ' + err.message;
+      }
+    }
+
+    function renderSummary() {
+      const completed = allJobs.filter(j => j.status === 'completed');
+      const capturedTotal = completed.reduce((sum, j) => sum + (Number(j.price) || 0), 0);
+      const counts = {};
+      allJobs.forEach(j => { counts[j.status] = (counts[j.status] || 0) + 1; });
+      const activeCount = ACTIVE_STATUSES.reduce((sum, s) => sum + (counts[s] || 0), 0);
+
+      summaryStrip.innerHTML =
+        '<div class="summary-total">$' + capturedTotal.toFixed(2) + '</div>' +
+        '<div class="summary-sub">captured across ' + completed.length + ' completed job' + (completed.length === 1 ? '' : 's') + '</div>' +
+        '<div class="status-counts">' +
+          '<span class="status-count"><strong>' + activeCount + '</strong> active</span>' +
+          '<span class="status-count"><strong>' + (counts.completed || 0) + '</strong> completed</span>' +
+          '<span class="status-count"><strong>' + (counts.cancelled || 0) + '</strong> cancelled</span>' +
+        '</div>';
+    }
+
+    function renderList() {
+      const filtered = allJobs.filter(j => {
+        if (currentFilter === 'all') return true;
+        if (currentFilter === 'active') return ACTIVE_STATUSES.includes(j.status);
+        return j.status === currentFilter;
+      });
+
+      jobListEl.innerHTML = '';
+      if (filtered.length === 0) {
+        jobListEl.innerHTML = '<div class="no-jobs">No jobs in this view.</div>';
+        return;
+      }
+
+      filtered.forEach(job => {
+        const customer = customerOf(job);
+        const statusLabel = STATUS_LABELS[job.status] || job.status;
+        const whenLabel = job.status === 'completed' && job.completed_at
+          ? 'Completed ' + new Date(job.completed_at).toLocaleString()
+          : 'Dispatched ' + new Date(job.created_at).toLocaleString();
+
+        const item = document.createElement('div');
+        item.className = 'job-card';
+        item.innerHTML =
+          '<div class="job-service">' + (SERVICE_LABELS[job.service_type] || job.service_type) +
+          '<span class="job-badge ' + job.status + '">' + statusLabel + '</span></div>' +
+          '<div class="job-price">' + formatPrice(job) + '</div>' +
+          '<div class="job-meta">' + whenLabel + '</div>' +
+          (job.customer_address ? '<div class="job-meta">' + job.customer_address + '</div>' : '') +
+          (customer ? '<div class="job-meta">' + customer.name +
+            (customer.phone ? ' &middot; <a href="tel:' + customer.phone + '" style="color:#93c5fd;">' + customer.phone + '</a>' : '') +
+            '</div>' : '');
+        jobListEl.appendChild(item);
+      });
+    }
+  </script>
+</body>
+</html>
