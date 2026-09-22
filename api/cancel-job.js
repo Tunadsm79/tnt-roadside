@@ -1,9 +1,12 @@
 // Marks a job cancelled: releases the Stripe authorization hold (no
 // charge happens) and updates the job + payment records to match. Called
-// from tech.html's "Cancel Job" button. Same service-role-key approach as
-// complete-job.js -- see that file's comment for why.
+// from tech.html's "Cancel Job" button. Also texts the customer and
+// admin (see api/_notify.js -- no-ops until Twilio env vars are set).
+// Same service-role-key approach as complete-job.js -- see that file's
+// comment for why.
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const { notifyStatusChange } = require('./_notify');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -53,7 +56,7 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status`);
+    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status,service_type,customers(name,phone)`);
     const job = jobs && jobs[0];
     if (!job) {
       res.status(404).json({ error: 'Job not found' });
@@ -86,6 +89,8 @@ module.exports = async (req, res) => {
       method: 'PATCH',
       body: JSON.stringify({ status: 'released' })
     });
+
+    await notifyStatusChange('cancelled', job, job.customers);
 
     res.status(200).json({ status: intent.status });
   } catch (err) {

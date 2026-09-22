@@ -1,12 +1,15 @@
 // Marks a job "en_route" -- the technician has left to head to the
 // customer. This is the step that triggers the customer-facing "on the
 // way" notification/copy (index.html's tracking screen watches job
-// status and updates its message accordingly -- no separate notification
-// system needed, it's just a status change like accept-job.js). Only
-// allowed from status 'dispatched' (the tech must have already accepted
-// the job before they can be en route to it); calling this from any other
-// status is rejected. Same service-role-key approach as the other
-// job-mutation endpoints -- see complete-job.js's comment for why.
+// status and updates its message accordingly), and also texts the
+// customer and admin a real SMS (see api/_notify.js -- no-ops until
+// Twilio env vars are set). Only allowed from status 'dispatched' (the
+// tech must have already accepted the job before they can be en route to
+// it); calling this from any other status is rejected. Same
+// service-role-key approach as the other job-mutation endpoints -- see
+// complete-job.js's comment for why.
+const { notifyStatusChange } = require('./_notify');
+
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -55,7 +58,7 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status`);
+    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status,service_type,customers(name,phone)`);
     const job = jobs && jobs[0];
     if (!job) {
       res.status(404).json({ error: 'Job not found' });
@@ -70,6 +73,8 @@ module.exports = async (req, res) => {
       method: 'PATCH',
       body: JSON.stringify({ status: 'en_route' })
     });
+
+    await notifyStatusChange('en_route', job, job.customers);
 
     res.status(200).json({ status: 'en_route' });
   } catch (err) {

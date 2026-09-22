@@ -1,7 +1,8 @@
 // Marks a job complete: captures the Stripe authorization hold (this is
 // the step that actually charges the customer's card) and updates the
 // job + payment records to match. Called from tech.html's "Complete Job"
-// button.
+// button. Also texts the customer and admin (see api/_notify.js --
+// no-ops until Twilio env vars are set).
 //
 // Only allowed once the job is marked 'arrived' -- the tech has to
 // actually be on location (see arrived-job.js) before the card can be
@@ -16,6 +17,7 @@
 // text in index.html/tech.html's source).
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const { notifyStatusChange } = require('./_notify');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -72,7 +74,7 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status`);
+    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status,service_type,customers(name,phone)`);
     const job = jobs && jobs[0];
     if (!job) {
       res.status(404).json({ error: 'Job not found' });
@@ -114,6 +116,8 @@ module.exports = async (req, res) => {
       // been charged, record what really moved instead.
       body: JSON.stringify({ status: 'captured', captured_at: now, amount: intent.amount_received / 100 })
     });
+
+    await notifyStatusChange('completed', job, job.customers);
 
     res.status(200).json({ status: intent.status, amountCaptured: intent.amount_received });
   } catch (err) {
