@@ -1,7 +1,7 @@
 {
-  "name": "TNT Roadside - Tech",
-  "short_name": "TNT Tech",
-  "description": "Technician location updates and job management for TNT Roadside.",
+  "name": "T&T Roadside - Tech",
+  "short_name": "T&T Tech",
+  "description": "Technician location updates and job management for T&T Roadside.",
   "start_url": "/tech.html",
   "scope": "/tech.html",
   "display": "standalone",
