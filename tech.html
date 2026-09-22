@@ -126,6 +126,12 @@
     #location-screen { width: 100%; }
     #job-section { width: 100%; margin-top: 24px; }
     .no-job { color: #64748b; font-size: 14px; }
+    #job-list {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
     .job-card {
       width: 100%;
       background: #1e293b;
@@ -138,6 +144,17 @@
       gap: 8px;
     }
     .job-service { font-size: 18px; font-weight: 800; }
+    .job-badge {
+      display: inline-block;
+      margin-left: 8px;
+      vertical-align: middle;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+    .job-badge.new { background: #7c2d12; color: #fed7aa; }
+    .job-badge.accepted { background: #14532d; color: #86efac; }
     .job-price { color: #2563EB; font-weight: 700; font-size: 16px; }
     .job-meta { font-size: 13px; color: #94a3b8; }
     .tracking-line {
@@ -179,6 +196,7 @@
       font-weight: 700;
       font-size: 14px;
     }
+    #back-to-list-btn { width: auto; align-self: flex-start; padding: 8px 12px; font-size: 13px; }
     .install-banner {
       display: none;
       align-items: center;
@@ -263,9 +281,17 @@
       <div class="location-line" id="last-updated"></div>
 
       <div id="job-section">
-        <div id="job-loading" class="no-job">Checking for an active job...</div>
+        <div id="job-loading" class="no-job">Checking for active jobs...</div>
         <div id="no-job-message" class="no-job hidden">No active job right now.</div>
+
+        <!-- List of every open job (requested or accepted) when none is
+             currently drilled into. Populated by renderList() below. -->
+        <div id="job-list" class="hidden"></div>
+        <div class="status error hidden" id="list-status"></div>
+
+        <!-- Detail view for whichever single job is currently open. -->
         <div id="job-card" class="job-card hidden">
+          <button class="secondary" id="back-to-list-btn">&larr; Back to list</button>
           <div class="job-service" id="job-service"></div>
           <div class="job-price" id="job-price"></div>
           <div class="job-meta" id="job-meta"></div>
@@ -327,7 +353,10 @@
 
     const jobLoading = document.getElementById('job-loading');
     const noJobMessage = document.getElementById('no-job-message');
+    const jobListEl = document.getElementById('job-list');
+    const listStatus = document.getElementById('list-status');
     const jobCard = document.getElementById('job-card');
+    const backToListBtn = document.getElementById('back-to-list-btn');
     const jobService = document.getElementById('job-service');
     const jobPrice = document.getElementById('job-price');
     const jobMeta = document.getElementById('job-meta');
@@ -352,7 +381,16 @@
     // customer's card at dispatch time.
     const AFTER_HOURS_HOLD_HOURS = 3;
 
-    let currentJob = null;
+    // ---- job state -------------------------------------------------
+    // More than one job can be open at once (a second customer can dispatch
+    // before the first is finished). `jobs` holds every job that's still
+    // active (not completed/cancelled). `openJobId` is whichever single job
+    // the tech has drilled into to see full details / accept / complete --
+    // null means "show the list" instead of one job's details.
+    let jobs = [];
+    let openJobId = null;
+    let detailJob = null; // the job object currently rendered in the detail view
+    const seenJobIds = new Set(); // used to detect genuinely NEW jobs for the sound/vibration alert
     let watchId = null;
     let lastGpsWriteAt = 0;
     // Continuous GPS tracking (while a job is active) can fire many times a
@@ -479,10 +517,10 @@
     // ---- new-job alert: sound + vibration, so a new dispatch actually
     //      gets the tech's attention instead of silently appearing next
     //      time they happen to glance at the screen -----------------
-    // true until the first refreshActiveJob() call finishes -- without
-    // this, simply reopening the app with an already-active job would
-    // incorrectly fire the "new job" alert for a job that isn't new at
-    // all, just newly loaded into this page session.
+    // true until the first refreshJobs() call finishes -- without this,
+    // simply reopening the app with jobs already open would incorrectly
+    // fire the "new job" alert for jobs that aren't new at all, just
+    // newly loaded into this page session.
     let firstJobCheck = true;
 
     function playNewJobAlert() {
@@ -512,86 +550,154 @@
       }
     }
 
-    // ---- active job: shows whatever job is currently open (not completed
-    //      or cancelled), lets the tech close it out ----
+    // ---- jobs: fetch every open job, show a list, let the tech drill
+    //      into one at a time to accept / complete / cancel it ----
     function startJobPolling() {
       requestWakeLock();
-      refreshActiveJob();
-      // Catches a newly-dispatched job while this page is left open.
-      setInterval(refreshActiveJob, 10000);
+      refreshJobs();
+      // Catches newly-dispatched jobs while this page is left open.
+      setInterval(refreshJobs, 10000);
     }
 
-    async function refreshActiveJob() {
+    async function refreshJobs() {
       try {
         const { data, error } = await supabaseClient
           .from('active_jobs_view')
           .select('id, service_type, price, status, payment_status, created_at, customer_lat, customer_lng, customer_address')
-          .order('created_at', { ascending: false })
-          .limit(1);
+          .order('created_at', { ascending: true });
         if (error) throw error;
 
         jobLoading.classList.add('hidden');
-        const job = data && data[0];
+        jobs = data || [];
 
-        if (!job) {
-          if (currentJob) stopContinuousTracking();
-          currentJob = null;
-          jobCard.classList.add('hidden');
-          noJobMessage.classList.remove('hidden');
-          firstJobCheck = false;
-          return;
-        }
-
-        noJobMessage.classList.add('hidden');
-        jobCard.classList.remove('hidden');
-
-        const isNewJob = !currentJob || currentJob.id !== job.id;
-        if (isNewJob && !firstJobCheck) playNewJobAlert();
-        currentJob = job;
+        // Alert on any job id we haven't seen before -- not just "the"
+        // one job like before, since several can be open at once now.
+        const newIds = jobs.map(j => j.id).filter(id => !seenJobIds.has(id));
+        if (newIds.length && !firstJobCheck) playNewJobAlert();
+        jobs.forEach(j => seenJobIds.add(j.id));
         firstJobCheck = false;
 
-        jobService.textContent = SERVICE_LABELS[job.service_type] || job.service_type;
-        jobPrice.textContent = job.price != null
-          ? ('$' + Number(job.price).toFixed(2))
-          : ('After-hours job (up to $' + (AFTER_HOURS_RATE * AFTER_HOURS_HOLD_HOURS).toFixed(2) + ' held)');
-        jobMeta.textContent = 'Dispatched ' + new Date(job.created_at).toLocaleTimeString();
-
-        // Where to actually go. A typed address is shown as-is and linked
-        // straight to Maps directions; a GPS-based job has coordinates but
-        // no address text, so those get used instead. If neither is on
-        // file (shouldn't normally happen), tell the tech to call.
-        if (job.customer_address) {
-          jobAddress.textContent = job.customer_address;
-          jobDirections.href = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(job.customer_address);
-          jobDirections.classList.remove('hidden');
-        } else if (job.customer_lat != null && job.customer_lng != null) {
-          jobAddress.textContent = 'GPS location (' + job.customer_lat.toFixed(5) + ', ' + job.customer_lng.toFixed(5) + ')';
-          jobDirections.href = 'https://www.google.com/maps/dir/?api=1&destination=' + job.customer_lat + ',' + job.customer_lng;
-          jobDirections.classList.remove('hidden');
+        // Technician location only needs to keep updating while at least
+        // one job is actually accepted (in progress) -- not just for jobs
+        // still sitting unaccepted in the queue.
+        const hasInProgressJob = jobs.some(j => j.status !== 'requested');
+        if (hasInProgressJob) {
+          startContinuousTracking();
         } else {
-          jobAddress.textContent = 'No location on file -- call the customer.';
-          jobDirections.classList.add('hidden');
+          stopContinuousTracking();
         }
 
-        // A freshly-dispatched job needs an explicit Accept before the
-        // tech can complete/cancel it -- makes sure a human actually saw
-        // and acknowledged it (paired with the sound/vibration alert
-        // above), rather than it just silently sitting there. 'requested'
-        // = not yet accepted; anything else ('dispatched', etc.) = tech
-        // already accepted it, show the normal complete/cancel actions.
-        if (job.status === 'requested') {
-          acceptRow.classList.remove('hidden');
-          jobActionsRow.classList.add('hidden');
-          hoursEntry.classList.add('hidden');
-        } else {
-          acceptRow.classList.add('hidden');
-          jobActionsRow.classList.remove('hidden');
+        if (jobs.length === 0) {
+          openJobId = null;
+          detailJob = null;
+          jobCard.classList.add('hidden');
+          jobListEl.classList.add('hidden');
+          noJobMessage.classList.remove('hidden');
+          return;
+        }
+        noJobMessage.classList.add('hidden');
+
+        // If the job currently open in detail view got completed/cancelled
+        // (or otherwise fell out of the list), drop back to the list
+        // instead of showing a stale, dead detail screen.
+        if (openJobId && !jobs.some(j => j.id === openJobId)) {
+          openJobId = null;
+          detailJob = null;
         }
 
-        if (isNewJob) startContinuousTracking();
+        if (openJobId) {
+          renderDetail(jobs.find(j => j.id === openJobId));
+        } else {
+          renderList();
+        }
       } catch (err) {
-        console.error('refreshActiveJob failed:', err);
+        console.error('refreshJobs failed:', err);
         jobLoading.classList.add('hidden');
+      }
+    }
+
+    function formatPrice(job) {
+      return job.price != null
+        ? ('$' + Number(job.price).toFixed(2))
+        : ('After-hours (up to $' + (AFTER_HOURS_RATE * AFTER_HOURS_HOLD_HOURS).toFixed(2) + ' held)');
+    }
+
+    function renderList() {
+      jobCard.classList.add('hidden');
+      jobListEl.classList.remove('hidden');
+      jobListEl.innerHTML = '';
+
+      jobs.forEach(job => {
+        const isNew = job.status === 'requested';
+
+        const item = document.createElement('div');
+        item.className = 'job-card';
+        item.innerHTML =
+          '<div class="job-service">' + (SERVICE_LABELS[job.service_type] || job.service_type) +
+          '<span class="job-badge ' + (isNew ? 'new' : 'accepted') + '">' + (isNew ? 'New' : 'Accepted') + '</span></div>' +
+          '<div class="job-price">' + formatPrice(job) + '</div>' +
+          '<div class="job-meta">Dispatched ' + new Date(job.created_at).toLocaleTimeString() + '</div>';
+
+        const btn = document.createElement('button');
+        btn.className = isNew ? 'success' : 'secondary';
+        btn.textContent = isNew ? 'Accept Job' : 'View Job';
+        btn.addEventListener('click', () => {
+          if (isNew) {
+            acceptJob(job.id, btn);
+          } else {
+            renderDetail(job);
+          }
+        });
+        item.appendChild(btn);
+
+        jobListEl.appendChild(item);
+      });
+    }
+
+    function renderDetail(job) {
+      detailJob = job;
+      openJobId = job.id;
+      listStatus.classList.add('hidden');
+      jobListEl.classList.add('hidden');
+      jobCard.classList.remove('hidden');
+
+      jobService.textContent = SERVICE_LABELS[job.service_type] || job.service_type;
+      jobPrice.textContent = formatPrice(job);
+      jobMeta.textContent = 'Dispatched ' + new Date(job.created_at).toLocaleTimeString();
+
+      // Where to actually go. A typed address is shown as-is and linked
+      // straight to Maps directions; a GPS-based job has coordinates but
+      // no address text, so those get used instead. If neither is on
+      // file (shouldn't normally happen), tell the tech to call.
+      if (job.customer_address) {
+        jobAddress.textContent = job.customer_address;
+        jobDirections.href = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(job.customer_address);
+        jobDirections.classList.remove('hidden');
+      } else if (job.customer_lat != null && job.customer_lng != null) {
+        jobAddress.textContent = 'GPS location (' + job.customer_lat.toFixed(5) + ', ' + job.customer_lng.toFixed(5) + ')';
+        jobDirections.href = 'https://www.google.com/maps/dir/?api=1&destination=' + job.customer_lat + ',' + job.customer_lng;
+        jobDirections.classList.remove('hidden');
+      } else {
+        jobAddress.textContent = 'No location on file -- call the customer.';
+        jobDirections.classList.add('hidden');
+      }
+
+      hoursEntry.classList.add('hidden');
+      jobActionStatus.textContent = '';
+      jobActionStatus.className = 'status';
+      completeBtn.disabled = false;
+      cancelBtn.disabled = false;
+
+      // A freshly-dispatched job needs an explicit Accept before the tech
+      // can complete/cancel it. Normally a job only reaches this detail
+      // view once already accepted (the list's Accept button handles that
+      // step first) -- this branch is just a defensive fallback.
+      if (job.status === 'requested') {
+        acceptRow.classList.remove('hidden');
+        jobActionsRow.classList.add('hidden');
+      } else {
+        acceptRow.classList.add('hidden');
+        jobActionsRow.classList.remove('hidden');
       }
     }
 
@@ -625,6 +731,48 @@
       trackingIndicator.classList.add('hidden');
     }
 
+    // ---- Accept Job -- called from the list (normal path) or from the
+    //      detail view's Accept button (defensive fallback) ----
+    async function acceptJob(jobId, btnEl) {
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.textContent = 'Accepting…';
+      }
+      listStatus.classList.add('hidden');
+      try {
+        const response = await fetch('/api/accept-job', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: jobId })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        // Jump straight into this job's details once accepted -- that's
+        // the whole point of accepting it from the list.
+        openJobId = jobId;
+        await refreshJobs();
+      } catch (err) {
+        console.error('accept failed:', err);
+        listStatus.classList.remove('hidden');
+        listStatus.className = 'status error';
+        listStatus.textContent = 'Could not accept job: ' + err.message;
+        if (btnEl) {
+          btnEl.disabled = false;
+          btnEl.textContent = 'Accept Job';
+        }
+      }
+    }
+
+    acceptBtn.addEventListener('click', () => {
+      if (detailJob) acceptJob(detailJob.id, acceptBtn);
+    });
+
+    backToListBtn.addEventListener('click', () => {
+      openJobId = null;
+      detailJob = null;
+      renderList();
+    });
+
     // ---- Complete Job / Cancel Job -- these are the buttons that actually
     //      move money (capture the Stripe hold, or release it) ----
     completeBtn.addEventListener('click', () => {
@@ -632,7 +780,7 @@
       // as before. After-hours jobs (price is null -- see showPrice() in
       // index.html) don't have a final amount yet, so ask the tech how
       // long the job actually took before capturing anything.
-      if (currentJob && currentJob.price == null) {
+      if (detailJob && detailJob.price == null) {
         hoursInput.value = '1';
         updateHoursTotal();
         jobActionsRow.classList.add('hidden');
@@ -642,36 +790,6 @@
       handleJobAction('complete');
     });
     cancelBtn.addEventListener('click', () => handleJobAction('cancel'));
-
-    acceptBtn.addEventListener('click', async () => {
-      if (!currentJob) return;
-      acceptBtn.disabled = true;
-      acceptBtn.textContent = 'Accepting…';
-      try {
-        const response = await fetch('/api/accept-job', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ job_id: currentJob.id })
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Request failed');
-        // Refresh right away so the complete/cancel buttons swap in
-        // immediately instead of waiting for the next 10-second poll.
-        // Deliberately NOT clearing currentJob first -- refreshActiveJob
-        // compares against it to decide isNewJob, and this is the same
-        // job (just a status change), so clearing it would wrongly
-        // re-fire the new-job sound/vibration alert on the tech's own
-        // accept tap.
-        await refreshActiveJob();
-      } catch (err) {
-        console.error('accept failed:', err);
-        jobActionStatus.className = 'status error';
-        jobActionStatus.textContent = 'Could not accept job: ' + err.message;
-      } finally {
-        acceptBtn.disabled = false;
-        acceptBtn.textContent = 'Accept Job';
-      }
-    });
 
     function updateHoursTotal() {
       const hours = Math.max(0.5, parseFloat(hoursInput.value) || 0.5);
@@ -696,7 +814,8 @@
     });
 
     async function handleJobAction(action, finalAmountCents) {
-      if (!currentJob) return;
+      if (!detailJob) return;
+      const jobId = detailJob.id;
       completeBtn.disabled = true;
       cancelBtn.disabled = true;
       jobActionStatus.className = 'status';
@@ -704,7 +823,7 @@
 
       try {
         const endpoint = action === 'complete' ? '/api/complete-job' : '/api/cancel-job';
-        const body = { job_id: currentJob.id };
+        const body = { job_id: jobId };
         if (finalAmountCents != null) body.final_amount_cents = finalAmountCents;
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -718,9 +837,12 @@
         jobActionStatus.textContent = action === 'complete'
           ? 'Job completed -- payment captured.'
           : 'Job cancelled -- hold released.';
-        stopContinuousTracking();
-        currentJob = null;
-        setTimeout(refreshActiveJob, 1500);
+        // This job is done -- it'll drop out of active_jobs_view on the
+        // next refresh. Head back to the list so any other pending jobs
+        // are visible right away instead of leaving a dead detail screen up.
+        openJobId = null;
+        detailJob = null;
+        setTimeout(refreshJobs, 1200);
       } catch (err) {
         console.error(action + ' failed:', err);
         jobActionStatus.className = 'status error';
