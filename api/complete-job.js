@@ -54,9 +54,16 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const { job_id } = req.body || {};
+    const { job_id, final_amount_cents } = req.body || {};
     if (!job_id) {
       res.status(400).json({ error: 'Missing job_id' });
+      return;
+    }
+    // Only present for after-hours jobs -- the tech enters real hours
+    // worked in tech.html, which computes this. Flat-rate jobs omit it
+    // entirely and just capture the full original hold, same as before.
+    if (final_amount_cents != null && (!Number.isInteger(final_amount_cents) || final_amount_cents <= 0)) {
+      res.status(400).json({ error: 'final_amount_cents must be a positive integer' });
       return;
     }
 
@@ -80,21 +87,40 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const intent = await stripe.paymentIntents.capture(payment.stripe_payment_intent_id);
+    const captureOptions = final_amount_cents != null ? { amount_to_capture: final_amount_cents } : undefined;
+    const intent = await stripe.paymentIntents.capture(payment.stripe_payment_intent_id, captureOptions);
 
     const now = new Date().toISOString();
+    const jobUpdate = { status: 'completed', payment_status: 'captured', completed_at: now };
+    // For after-hours jobs, jobs.price started out null (no flat price --
+    // see showPrice() in index.html). Now that we know what actually got
+    // captured, record the real final price instead of leaving it null.
+    if (final_amount_cents != null) {
+      jobUpdate.price = intent.amount_received / 100;
+    }
     await supabaseRequest(`/jobs?id=eq.${job_id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: 'completed', payment_status: 'captured', completed_at: now })
+      body: JSON.stringify(jobUpdate)
     });
     await supabaseRequest(`/payments?job_id=eq.${job_id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: 'captured', captured_at: now })
+      // amount started out as the authorized hold (the full after-hours
+      // ceiling, for an after-hours job); now that the card's actually
+      // been charged, record what really moved instead.
+      body: JSON.stringify({ status: 'captured', captured_at: now, amount: intent.amount_received / 100 })
     });
 
     res.status(200).json({ status: intent.status, amountCaptured: intent.amount_received });
   } catch (err) {
     console.error('complete-job error:', err);
+    if (err.code === 'amount_too_large' || /amount_to_capture/i.test(err.message || '')) {
+      res.status(400).json({
+        error: 'That amount is more than the original hold on this card -- the job ran ' +
+          'longer than the pre-authorized limit. Contact the customer to arrange payment ' +
+          'for the difference; this job has NOT been marked complete.'
+      });
+      return;
+    }
     res.status(500).json({ error: 'Could not complete job' });
   }
 };

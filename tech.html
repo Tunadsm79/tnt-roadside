@@ -75,6 +75,44 @@
     .status.error { color: #f87171; }
     .status.ok { color: #4ade80; }
     .hidden { display: none; }
+    .hours-entry {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 12px;
+      text-align: left;
+    }
+    .hours-entry label {
+      display: block;
+      font-size: 12px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+    .hours-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .hours-row input {
+      width: 80px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 16px;
+      text-align: center;
+    }
+    #hours-total {
+      font-size: 18px;
+      font-weight: 800;
+      color: #f8fafc;
+    }
+    .hours-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
     .location-line {
       font-size: 13px;
       color: #64748b;
@@ -230,7 +268,18 @@
           <div class="tracking-line hidden" id="tracking-indicator">
             <span class="tracking-dot"></span>Sharing your live location with the customer
           </div>
-          <div class="job-actions">
+          <div id="hours-entry" class="hours-entry hidden">
+            <label for="hours-input">After-hours job — hours worked (billed $125/hr)</label>
+            <div class="hours-row">
+              <input type="number" id="hours-input" min="0.5" step="0.5" value="1">
+              <span id="hours-total">$125.00</span>
+            </div>
+            <div class="hours-actions">
+              <button id="hours-confirm-btn" class="success">Confirm &amp; Complete</button>
+              <button id="hours-cancel-btn" class="secondary">Back</button>
+            </div>
+          </div>
+          <div class="job-actions" id="job-actions-row">
             <button id="complete-btn" class="success">Complete Job</button>
             <button id="cancel-btn" class="danger">Cancel Job</button>
           </div>
@@ -279,6 +328,18 @@
     const completeBtn = document.getElementById('complete-btn');
     const cancelBtn = document.getElementById('cancel-btn');
     const jobActionStatus = document.getElementById('job-action-status');
+    const jobActionsRow = document.getElementById('job-actions-row');
+    const hoursEntry = document.getElementById('hours-entry');
+    const hoursInput = document.getElementById('hours-input');
+    const hoursTotal = document.getElementById('hours-total');
+    const hoursConfirmBtn = document.getElementById('hours-confirm-btn');
+    const hoursCancelBtn = document.getElementById('hours-cancel-btn');
+    const AFTER_HOURS_RATE = 125;
+    // Must match AFTER_HOURS_HOLD_HOURS in index.html -- this is the
+    // most an after-hours job can ever be charged, because Stripe
+    // can't capture more than what was originally authorized on the
+    // customer's card at dispatch time.
+    const AFTER_HOURS_HOLD_HOURS = 3;
 
     let currentJob = null;
     let watchId = null;
@@ -459,10 +520,45 @@
 
     // ---- Complete Job / Cancel Job -- these are the buttons that actually
     //      move money (capture the Stripe hold, or release it) ----
-    completeBtn.addEventListener('click', () => handleJobAction('complete'));
+    completeBtn.addEventListener('click', () => {
+      // Flat-rate jobs (price already known) complete immediately, same
+      // as before. After-hours jobs (price is null -- see showPrice() in
+      // index.html) don't have a final amount yet, so ask the tech how
+      // long the job actually took before capturing anything.
+      if (currentJob && currentJob.price == null) {
+        hoursInput.value = '1';
+        updateHoursTotal();
+        jobActionsRow.classList.add('hidden');
+        hoursEntry.classList.remove('hidden');
+        return;
+      }
+      handleJobAction('complete');
+    });
     cancelBtn.addEventListener('click', () => handleJobAction('cancel'));
 
-    async function handleJobAction(action) {
+    function updateHoursTotal() {
+      const hours = Math.max(0.5, parseFloat(hoursInput.value) || 0.5);
+      const capped = Math.min(hours, AFTER_HOURS_HOLD_HOURS);
+      hoursTotal.textContent = '$' + (capped * AFTER_HOURS_RATE).toFixed(2) +
+        (hours > AFTER_HOURS_HOLD_HOURS ? ' (capped at hold limit)' : '');
+    }
+    hoursInput.addEventListener('input', updateHoursTotal);
+
+    hoursCancelBtn.addEventListener('click', () => {
+      hoursEntry.classList.add('hidden');
+      jobActionsRow.classList.remove('hidden');
+    });
+
+    hoursConfirmBtn.addEventListener('click', () => {
+      const hours = Math.max(0.5, parseFloat(hoursInput.value) || 0.5);
+      const cappedHours = Math.min(hours, AFTER_HOURS_HOLD_HOURS);
+      const finalAmountCents = Math.round(cappedHours * AFTER_HOURS_RATE * 100);
+      hoursEntry.classList.add('hidden');
+      jobActionsRow.classList.remove('hidden');
+      handleJobAction('complete', finalAmountCents);
+    });
+
+    async function handleJobAction(action, finalAmountCents) {
       if (!currentJob) return;
       completeBtn.disabled = true;
       cancelBtn.disabled = true;
@@ -471,10 +567,12 @@
 
       try {
         const endpoint = action === 'complete' ? '/api/complete-job' : '/api/cancel-job';
+        const body = { job_id: currentJob.id };
+        if (finalAmountCents != null) body.final_amount_cents = finalAmountCents;
         const response = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ job_id: currentJob.id })
+          body: JSON.stringify(body)
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');

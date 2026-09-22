@@ -454,6 +454,14 @@
     // After-hours window: 7pm-7am, every day. During this window the flat
     // prices above don't apply -- it's $125/hr per car instead.
     const AFTER_HOURS_RATE = 125;
+    // The most an after-hours job can ever be billed. Stripe can only
+    // ever capture up to what was originally authorized on the card,
+    // so this is also what gets held at dispatch time (see
+    // authorizeAmount below) -- the tech enters actual hours worked
+    // when they complete the job, and only that real amount gets
+    // captured, with the rest of the hold released automatically.
+    // Must match AFTER_HOURS_HOLD_HOURS in tech.html.
+    const AFTER_HOURS_HOLD_HOURS = 3;
     function isAfterHours() {
       const hour = new Date().getHours();
       return hour >= 19 || hour < 7;
@@ -614,9 +622,12 @@
 
       if (isAfterHours()) {
         currentPrice = null;
+        const holdAmount = AFTER_HOURS_RATE * AFTER_HOURS_HOLD_HOURS;
         priceEl.innerHTML =
           `<strong>After-hours rate: $${AFTER_HOURS_RATE}/hr per car</strong><br>` +
-          `Calls between 7pm\u20137am are billed hourly instead of the standard flat rate.`;
+          `Calls between 7pm\u20137am are billed hourly instead of the standard flat rate. ` +
+          `A temporary hold of up to $${holdAmount} will be placed on your card \u2014 ` +
+          `you're only charged for the actual time worked once the job is done.`;
         if (etaOk) document.getElementById('dispatch-form').style.display = 'block';
         return;
       }
@@ -832,9 +843,12 @@
 
       // Amount to place on hold right now. After-hours jobs don't have a
       // final price yet (billed hourly once the job wraps up), so we
-      // authorize one hour ($125) as an estimate and settle the real
-      // amount when the hold is captured later.
-      const authorizeAmount = currentPrice != null ? currentPrice : AFTER_HOURS_RATE;
+      // authorize the full $AFTER_HOURS_HOLD_HOURS-hour ceiling as a safety
+      // margin -- Stripe can never capture more than this later, so this
+      // has to cover the longest a job could plausibly run. The tech
+      // enters real hours worked at completion and only that amount gets
+      // captured; the rest of the hold is released automatically.
+      const authorizeAmount = currentPrice != null ? currentPrice : (AFTER_HOURS_RATE * AFTER_HOURS_HOLD_HOURS);
       const paymentAmountCents = Math.round(authorizeAmount * 100);
       let paymentIntentId = null;
 
