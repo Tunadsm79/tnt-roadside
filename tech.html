@@ -461,7 +461,7 @@
         jobService.textContent = SERVICE_LABELS[job.service_type] || job.service_type;
         jobPrice.textContent = job.price != null
           ? ('$' + Number(job.price).toFixed(2))
-          : 'After-hours job (est. $125 held)';
+          : ('After-hours job (up to $' + (AFTER_HOURS_RATE * AFTER_HOURS_HOLD_HOURS).toFixed(2) + ' held)');
         jobMeta.textContent = 'Dispatched ' + new Date(job.created_at).toLocaleTimeString();
 
         // Where to actually go. A typed address is shown as-is and linked
