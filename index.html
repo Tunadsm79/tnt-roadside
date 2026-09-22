@@ -798,6 +798,82 @@
       }
     }
 
+    // ---- Dispatch routing (Piece 2: nearest free on-duty technician) ----
+    // Used once, at the moment a new job is submitted, to decide which
+    // on-duty technician gets offered the job first (this only sets the
+    // initial technician_id on the job row / the "no technician
+    // available" gate below -- it doesn't lock the job to that tech; any
+    // on-duty tech can still accept it from their shared job list in
+    // tech.html, same as before). Replaces the old fetchActiveTechnician()
+    // call this function used to make here, which only ever matched
+    // whichever technician had `active = true` (in practice always
+    // Demian) and ignored on_duty status, distance, and whether that tech
+    // was already busy on another job.
+    //
+    // Policy (locked in with Demian 2026-09-22):
+    //   1. Not on duty at all -> no technician, dispatch is blocked.
+    //   2. Rank on-duty techs by real driving time to the customer.
+    //   3. Prefer the nearest FREE (not-busy) technician.
+    //   4. Only offer it to a busy technician if every on-duty technician
+    //      is currently busy.
+    //   5. If we don't have enough data to rank by distance (Maps not
+    //      loaded, or no on-duty tech has reported a GPS position yet),
+    //      fall back to "any free on-duty tech, else any on-duty tech" --
+    //      still correct, just not distance-sorted.
+    async function selectTechnicianForDispatch() {
+      let onDutyTechs = [];
+      try {
+        const response = await fetch('/api/available-technicians');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        onDutyTechs = result.technicians || [];
+      } catch (err) {
+        console.error('Could not fetch available technicians:', err);
+        return null;
+      }
+
+      if (onDutyTechs.length === 0) return null;
+
+      const pickFallback = () => onDutyTechs.find(t => !t.busy) || onDutyTechs[0];
+
+      if (onDutyTechs.length === 1) return onDutyTechs[0];
+
+      const withLocation = onDutyTechs.filter(
+        t => t.current_lat != null && t.current_lng != null
+      );
+
+      if (!distanceService || withLocation.length === 0 || !currentDestination) {
+        return pickFallback();
+      }
+
+      return new Promise((resolve) => {
+        distanceService.getDistanceMatrix({
+          origins: withLocation.map(t => ({ lat: t.current_lat, lng: t.current_lng })),
+          destinations: [currentDestination],
+          travelMode: google.maps.TravelMode.DRIVING,
+          unitSystem: google.maps.UnitSystem.IMPERIAL,
+        }, (response, status) => {
+          if (status !== 'OK') {
+            resolve(pickFallback());
+            return;
+          }
+
+          const ranked = withLocation
+            .map((tech, i) => ({ tech, result: response.rows[i].elements[0] }))
+            .filter(r => r.result && r.result.status === 'OK')
+            .sort((a, b) => a.result.duration.value - b.result.duration.value);
+
+          if (ranked.length === 0) {
+            resolve(pickFallback());
+            return;
+          }
+
+          const nearestFree = ranked.find(r => !r.tech.busy);
+          resolve((nearestFree || ranked[0]).tech);
+        });
+      });
+    }
+
     function updateTrackingDisplay(destination, technician) {
       const nameEl = document.getElementById('tracking-tech-name');
       const etaEl = document.getElementById('tracking-eta');
@@ -915,7 +991,7 @@
       // distance calculation above and then thrown away.
       const customerAddress = (currentDestination && typeof currentDestination === 'string') ? currentDestination : null;
 
-      const technician = await fetchActiveTechnician();
+      const technician = await selectTechnicianForDispatch();
 
       // Don't take a customer's money (or falsely tell them help is on
       // the way) if there's no technician actually available to send --
