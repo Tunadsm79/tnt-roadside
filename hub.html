@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>T&amp;T Roadside</title>
+  <link rel="manifest" href="/hub-manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="T&amp;T Roadside">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 48px;
+    }
+    header {
+      text-align: center;
+      margin: 40px 0 40px;
+    }
+    header h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+    header h1 span { color: #E01010; }
+    header p {
+      margin-top: 8px;
+      color: #94a3b8;
+      font-size: 15px;
+    }
+    .picker {
+      width: 100%;
+      max-width: 420px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .role-link {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 20px;
+      text-align: left;
+      color: #f8fafc;
+      text-decoration: none;
+      transition: border-color 0.15s ease, transform 0.1s ease;
+    }
+    .role-link:active {
+      border-color: #2563EB;
+      transform: translateY(-1px);
+    }
+    .role-link .icon {
+      font-size: 28px;
+      width: 48px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .role-link .label {
+      font-size: 17px;
+      font-weight: 600;
+    }
+    .role-link .sub {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-top: 2px;
+    }
+    footer {
+      margin-top: 40px;
+      color: #475569;
+      font-size: 12px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>T&amp;T <span>Roadside</span></h1>
+    <p>Pick where you're headed.</p>
+  </header>
+
+  <div class="picker">
+    <a class="role-link" href="/index.html">
+      <div class="icon">🚘</div>
+      <div>
+        <div class="label">Customer Site</div>
+        <div class="sub">Request roadside help</div>
+      </div>
+    </a>
+    <a class="role-link" href="/tech.html">
+      <div class="icon">🔧</div>
+      <div>
+        <div class="label">Technician</div>
+        <div class="sub">Accept and work jobs — PIN required</div>
+      </div>
+    </a>
+    <a class="role-link" href="/admin.html">
+      <div class="icon">📋</div>
+      <div>
+        <div class="label">Admin</div>
+        <div class="sub">All jobs, totals, tech status — PIN required</div>
+      </div>
+    </a>
+  </div>
+
+  <footer>&copy; 2026 T&amp;T Roadside. Available 7 days a week.</footer>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
