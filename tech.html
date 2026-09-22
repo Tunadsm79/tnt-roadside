@@ -74,7 +74,13 @@
     }
     .status.error { color: #f87171; }
     .status.ok { color: #4ade80; }
-    .hidden { display: none; }
+    /* !important is deliberate here: .hidden's whole job is to force
+       an element hidden regardless of what other display-setting class
+       (like .job-actions, display:flex) is also on it -- without this,
+       whichever rule happens to be declared later in this stylesheet
+       wins the cascade, which is exactly the bug that let both the
+       Accept button and Complete/Cancel show at the same time. */
+    .hidden { display: none !important; }
     .hours-entry {
       background: #1e293b;
       border: 1px solid #334155;
