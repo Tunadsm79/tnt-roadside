@@ -424,9 +424,51 @@
       );
     });
 
+    // ---- keep the screen awake for the whole shift -----------------
+    // The plan: this page stays open on a dedicated tablet (split-screen
+    // next to a real maps app for turn-by-turn), the whole time the tech
+    // is on shift -- not just during an active job. If the screen locks,
+    // ALL JavaScript on this page pauses, including the GPS tracking
+    // below, and the customer's tracking map freezes with no warning.
+    // The Wake Lock API tells the OS "don't let this screen sleep while
+    // this tab is open." It's a browser-standard API, no app install
+    // needed -- supported on Android Chrome and iOS Safari 16.4+.
+    let wakeLock = null;
+
+    async function requestWakeLock() {
+      if (!('wakeLock' in navigator)) {
+        console.warn('Wake Lock API not supported on this browser -- screen may sleep normally.');
+        return;
+      }
+      try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => {
+          console.log('Wake lock was released (screen may sleep now).');
+        });
+        console.log('Wake lock active -- screen will stay on while this tab is open.');
+      } catch (err) {
+        // Common, harmless reasons this can fail: low battery (some
+        // browsers refuse to hold a wake lock below a battery threshold),
+        // or the tab isn't visible yet when this runs.
+        console.warn('Could not acquire wake lock:', err.message);
+      }
+    }
+
+    // A wake lock is automatically released whenever the tab is hidden
+    // (tab switched away, app backgrounded) -- that's true even in
+    // split-screen if the OS still considers this pane "hidden" at some
+    // point. Re-request it every time the page becomes visible again so
+    // it doesn't just silently stay off after the first interruption.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && sessionStorage.getItem('tnt-tech-unlocked') === '1') {
+        requestWakeLock();
+      }
+    });
+
     // ---- active job: shows whatever job is currently open (not completed
     //      or cancelled), lets the tech close it out ----
     function startJobPolling() {
+      requestWakeLock();
       refreshActiveJob();
       // Catches a newly-dispatched job while this page is left open.
       setInterval(refreshActiveJob, 10000);
