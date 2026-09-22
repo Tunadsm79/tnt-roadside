@@ -113,6 +113,13 @@
       color: #cbd5e1;
     }
     .eta-box strong { color: #f8fafc; }
+    .tracking-map {
+      width: 100%;
+      height: 220px;
+      border-radius: 12px;
+      margin: 16px 0;
+      background: #1e293b;
+    }
 
     .spinner {
       width: 16px;
@@ -353,6 +360,8 @@
       <p id="tracking-tech-name">Your technician has been notified.</p>
 
       <div class="eta-box" id="tracking-eta" style="display:block;">Waiting for technician location&hellip;</div>
+
+      <div id="tracking-map" class="tracking-map"></div>
 
       <p id="tracking-updated" style="margin-top:8px; font-size:13px;"></p>
 
@@ -650,6 +659,69 @@
     // address or a {lat,lng} object as the destination, same as before.
     let trackingInterval = null;
     const TRACKING_POLL_MS = 15000;
+    let trackingMap = null;
+    let techMarker = null;
+    let destMarker = null;
+
+    // Creates the live map the first time we have a real technician
+    // position, then just moves the marker / re-centers on every poll
+    // after that -- Maps needs the container visible with real size
+    // before it's created, so this only ever runs once the tracking
+    // screen is already showing (called from updateTrackingDisplay,
+    // which only reaches this point once we have coordinates).
+    function ensureTrackingMap(origin) {
+      const mapEl = document.getElementById('tracking-map');
+      if (!mapEl || !window.google || !google.maps) return;
+
+      if (!trackingMap) {
+        trackingMap = new google.maps.Map(mapEl, {
+          center: origin,
+          zoom: 13,
+          disableDefaultUI: true,
+          zoomControl: true,
+        });
+        techMarker = new google.maps.Marker({
+          position: origin,
+          map: trackingMap,
+          title: 'Technician',
+        });
+      } else {
+        techMarker.setPosition(origin);
+      }
+
+      // If we know the customer's exact coordinates (they used the GPS
+      // button instead of typing an address), show them on the map too
+      // and zoom/pan to fit both points. If we only have a typed
+      // address (a string), skip the second pin rather than spend an
+      // extra geocoding call on it, and just follow the technician.
+      if (currentDestination && typeof currentDestination === 'object') {
+        if (!destMarker) {
+          destMarker = new google.maps.Marker({
+            position: currentDestination,
+            map: trackingMap,
+            title: 'You',
+            icon: {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: '#2563EB',
+              fillOpacity: 1,
+              strokeColor: '#ffffff',
+              strokeWeight: 2,
+            },
+          });
+        }
+        const bounds = new google.maps.LatLngBounds();
+        bounds.extend(origin);
+        bounds.extend(currentDestination);
+        trackingMap.fitBounds(bounds, 48);
+      } else {
+        if (destMarker) {
+          destMarker.setMap(null);
+          destMarker = null;
+        }
+        trackingMap.panTo(origin);
+      }
+    }
 
     async function fetchActiveTechnician() {
       try {
@@ -687,6 +759,7 @@
       }
 
       const origin = { lat: technician.current_lat, lng: technician.current_lng };
+      ensureTrackingMap(origin);
       distanceService.getDistanceMatrix({
         origins: [origin],
         destinations: [destination],
