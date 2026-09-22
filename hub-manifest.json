@@ -3,7 +3,7 @@
   "short_name": "T&T Roadside",
   "description": "Pick Customer, Technician, or Admin.",
   "start_url": "/hub.html",
-  "scope": "/",
+  "scope": "/hub.html",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",

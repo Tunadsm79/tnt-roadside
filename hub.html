@@ -4,12 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>T&amp;T Roadside</title>
-  <link rel="manifest" href="/hub-manifest.json">
-  <meta name="theme-color" content="#0f172a">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="T&amp;T Roadside">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -24,7 +18,7 @@
     }
     header {
       text-align: center;
-      margin: 40px 0 40px;
+      margin: 40px 0 24px;
     }
     header h1 {
       font-size: 28px;
@@ -82,13 +76,76 @@
       font-size: 12px;
       text-align: center;
     }
+    .install-banner {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      max-width: 420px;
+      background: #1e293b;
+      border: 1px solid #2563EB;
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 20px;
+    }
+    .install-banner-text {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .install-banner-text strong {
+      font-size: 14px;
+      color: #f8fafc;
+    }
+    .install-banner-text span {
+      font-size: 13px;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
+    .install-banner-btn {
+      flex-shrink: 0;
+      background: #2563EB;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .install-banner-close {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      color: #64748b;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 4px;
+    }
   </style>
+  <link rel="manifest" href="/hub-manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="T&amp;T Roadside">
 </head>
 <body>
   <header>
     <h1>T&amp;T <span>Roadside</span></h1>
     <p>Pick where you're headed.</p>
   </header>
+
+  <div class="install-banner" id="install-banner">
+    <div class="install-banner-text">
+      <strong>Install this picker</strong>
+      <span id="install-banner-sub">Add this to your home screen to jump straight to Customer, Tech, or Admin.</span>
+    </div>
+    <button class="install-banner-btn" id="install-btn">Install</button>
+    <button class="install-banner-close" id="install-dismiss" aria-label="Dismiss">&times;</button>
+  </div>
 
   <div class="picker">
     <a class="role-link" href="/index.html">
@@ -115,6 +172,55 @@
   </div>
 
   <footer>&copy; 2026 T&amp;T Roadside. Available 7 days a week.</footer>
+
+  <script>
+    (function () {
+      const banner = document.getElementById('install-banner');
+      const sub = document.getElementById('install-banner-sub');
+      const installBtn = document.getElementById('install-btn');
+      const dismissBtn = document.getElementById('install-dismiss');
+      let deferredPrompt = null;
+
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true;
+      const dismissed = localStorage.getItem('tnt-hub-install-dismissed') === '1';
+      const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+
+      if (!isStandalone && !dismissed && isIOS) {
+        // Safari has no programmatic install prompt -- show instructions
+        // instead of a button that would do nothing when tapped.
+        installBtn.style.display = 'none';
+        sub.textContent = 'Tap the Share icon below, then "Add to Home Screen."';
+        banner.style.display = 'flex';
+      }
+
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        if (!isStandalone && !dismissed) {
+          banner.style.display = 'flex';
+        }
+      });
+
+      installBtn.addEventListener('click', async () => {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        banner.style.display = 'none';
+      });
+
+      dismissBtn.addEventListener('click', () => {
+        banner.style.display = 'none';
+        localStorage.setItem('tnt-hub-install-dismissed', '1');
+      });
+
+      window.addEventListener('appinstalled', () => {
+        banner.style.display = 'none';
+      });
+    })();
+  </script>
 
   <script>
     if ('serviceWorker' in navigator) {

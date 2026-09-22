@@ -5,7 +5,7 @@
 // right now, and a customer stuck on a stale cached version mid-build
 // would be worse than no caching at all.
 
-const CACHE_NAME = 'tnt-roadside-v4';
+const CACHE_NAME = 'tnt-roadside-v5';
 const CORE_ASSETS = [
   '/',
   '/hub.html',
