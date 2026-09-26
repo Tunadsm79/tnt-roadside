@@ -1631,7 +1631,39 @@
   </script>
 
   <script>
+    // Investigated 2026-09-26: a customer/tech can load this page right
+    // after a new version is deployed and briefly get the PREVIOUS
+    // version -- confirmed via direct header/content checks against the
+    // live site that this comes from Vercel's own edge CDN occasionally
+    // serving a not-yet-updated cached copy of this static file for a
+    // short window right after a push (Vercel's docs are explicit that
+    // this kind of static-file edge caching can't be turned off with our
+    // own Cache-Control headers -- see the project doc for the full
+    // investigation), not from anything this app's own service worker
+    // caches. sw.js already fetches fresh over the network on every page
+    // load and already calls skipWaiting()/clients.claim() so a new
+    // version takes over immediately once it's actually reachable -- the
+    // one gap was that a page a customer already had open (or had
+    // visited a moment too soon after a deploy) never knew to update
+    // itself once the real new version became available. This closes
+    // that gap: the moment a new service worker actually takes control
+    // of this page, reload once so whoever's looking at it lands on the
+    // true current version without having to notice and refresh
+    // themselves. Guarded so it only fires for a page that already had
+    // an older worker controlling it -- not on a first-ever visit, where
+    // there's nothing stale to correct and an unprompted reload would
+    // just be an unnecessary flash.
     if ('serviceWorker' in navigator) {
+      const hadController = !!navigator.serviceWorker.controller;
+      if (hadController) {
+        let reloadedForUpdate = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloadedForUpdate) return;
+          reloadedForUpdate = true;
+          window.location.reload();
+        });
+      }
+
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').catch((err) => {
           console.error('Service worker registration failed:', err);

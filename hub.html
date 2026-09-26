@@ -223,7 +223,19 @@
   </script>
 
   <script>
+    // See index.html's matching comment (2026-09-26 stale-page
+    // investigation) for the full story.
     if ('serviceWorker' in navigator) {
+      const hadController = !!navigator.serviceWorker.controller;
+      if (hadController) {
+        let reloadedForUpdate = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloadedForUpdate) return;
+          reloadedForUpdate = true;
+          window.location.reload();
+        });
+      }
+
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').catch(() => {});
       });

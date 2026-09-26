@@ -1191,7 +1191,23 @@
   </script>
 
   <script>
+    // See index.html's matching comment (2026-09-26 stale-page
+    // investigation) for the full story: this reloads a page exactly
+    // once, only when a new service worker actually takes over from an
+    // older one that was already controlling it, so a tech who has this
+    // screen open (or opened it a moment too soon after a deploy) always
+    // ends up on the true current version.
     if ('serviceWorker' in navigator) {
+      const hadController = !!navigator.serviceWorker.controller;
+      if (hadController) {
+        let reloadedForUpdate = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (reloadedForUpdate) return;
+          reloadedForUpdate = true;
+          window.location.reload();
+        });
+      }
+
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').catch((err) => {
           console.error('Service worker registration failed:', err);
