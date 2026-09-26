@@ -1671,5 +1671,53 @@
       });
     }
   </script>
+
+  <script>
+    // Second half of the 2026-09-26 stale-page fix. The controllerchange
+    // reload above only fires when sw.js itself is redeployed with
+    // different bytes -- most deploys (like this one) only change
+    // index.html/tech.html and never touch sw.js, so that check alone
+    // would never have caught the exact bug we saw. This check catches
+    // that case directly: right after this page finishes loading, it
+    // re-fetches this exact same URL, but with a made-up query string
+    // that has never been requested before (a timestamp + random string).
+    // A URL nobody has ever asked for can't already have a stale copy
+    // sitting in any cache -- not the browser's own HTTP cache, not the
+    // service worker's Cache Storage, and not Vercel's edge CDN -- so
+    // that fetch is guaranteed to go all the way back to Vercel's origin
+    // and come back with the true current version. If that fresh copy's
+    // size doesn't match what's actually rendered on screen right now,
+    // this page is stale, and we replace it with a freshly-loaded copy
+    // (also cache-busted, so the corrective reload can't hit a stale
+    // copy either). If they match, nothing happens -- no flash, no
+    // reload, completely invisible for the normal case where the page
+    // was already current.
+    (function selfHealStalePage() {
+      try {
+        if (!window.fetch || !window.performance) return;
+        const nav = performance.getEntriesByType('navigation')[0];
+        const renderedSize = nav && nav.decodedBodySize;
+        if (!renderedSize) return;
+
+        const freshUrl = location.pathname +
+          (location.search ? location.search + '&' : '?') +
+          '_freshcheck=' + Date.now() + Math.random().toString(36).slice(2);
+
+        fetch(freshUrl, { cache: 'no-store' })
+          .then((res) => res.arrayBuffer())
+          .then((buf) => {
+            if (Math.abs(buf.byteLength - renderedSize) > 8) {
+              window.location.replace(
+                location.pathname + (location.search ? location.search + '&' : '?') +
+                '_v=' + Date.now()
+              );
+            }
+          })
+          .catch(() => {}); // offline / request failed -- nothing to correct
+      } catch (err) {
+        // Never let this check itself break the page.
+      }
+    })();
+  </script>
 </body>
 </html>

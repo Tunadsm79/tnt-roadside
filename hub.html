@@ -241,5 +241,40 @@
       });
     }
   </script>
+
+  <script>
+    // Second half of the 2026-09-26 stale-page fix -- see index.html's
+    // matching comment for the full explanation. Re-fetches this same
+    // page with a never-before-used cache-busting query string (which
+    // can't already be stale in any cache layer), compares its size to
+    // what's actually rendered, and corrects with a cache-busted reload
+    // if they don't match. No-op when the page is already current.
+    (function selfHealStalePage() {
+      try {
+        if (!window.fetch || !window.performance) return;
+        const nav = performance.getEntriesByType('navigation')[0];
+        const renderedSize = nav && nav.decodedBodySize;
+        if (!renderedSize) return;
+
+        const freshUrl = location.pathname +
+          (location.search ? location.search + '&' : '?') +
+          '_freshcheck=' + Date.now() + Math.random().toString(36).slice(2);
+
+        fetch(freshUrl, { cache: 'no-store' })
+          .then((res) => res.arrayBuffer())
+          .then((buf) => {
+            if (Math.abs(buf.byteLength - renderedSize) > 8) {
+              window.location.replace(
+                location.pathname + (location.search ? location.search + '&' : '?') +
+                '_v=' + Date.now()
+              );
+            }
+          })
+          .catch(() => {});
+      } catch (err) {
+        // Never let this check itself break the page.
+      }
+    })();
+  </script>
 </body>
 </html>
