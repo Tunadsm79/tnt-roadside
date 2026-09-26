@@ -499,6 +499,37 @@
     // job list regardless of what this flips. No remote-lock exists today
     // -- flagged here in the UI, not just in chat, since it's the kind of
     // thing an admin would reasonably assume this button does.
+    // Renders the "what are they working right now" line in a tech's
+    // detail panel. tech.current_job comes from api/tech-status.js,
+    // which only knows about a job once it's actually been ACCEPTED
+    // (technician_id + accepted_at are set at accept time, not job
+    // creation -- see api/accept-job.js's comment). A tech who's been
+    // dispatched a job but hasn't tapped Accept yet won't show here on
+    // purpose -- "what are they working" means what they've taken on,
+    // not what they were suggested.
+    function currentJobHtml(currentJob) {
+      if (!currentJob) {
+        return '<div class="tech-detail-note">No active job right now.</div>';
+      }
+      const service = SERVICE_LABELS[currentJob.service_type] || currentJob.service_type;
+      const statusLabel = STATUS_LABELS[currentJob.status] || currentJob.status;
+      const elapsed = currentJob.accepted_at
+        ? relativeTime(currentJob.accepted_at) + ' since accepted'
+        : 'accepted time unknown'; // shouldn't happen for a job with technician_id set post-fix
+      const who = currentJob.customer_name || 'unnamed customer';
+      const where = currentJob.customer_address ? ' — ' + currentJob.customer_address : '';
+      const more = currentJob.other_jobs_count > 0
+        ? '<div class="tech-detail-meta">+' + currentJob.other_jobs_count +
+          ' more job' + (currentJob.other_jobs_count === 1 ? '' : 's') + ' queued</div>'
+        : '';
+      return (
+        '<div class="tech-detail-meta"><strong>' + service + '</strong> — ' + statusLabel + '</div>' +
+        '<div class="tech-detail-meta">' + who + where + '</div>' +
+        '<div class="tech-detail-note">' + elapsed + '</div>' +
+        more
+      );
+    }
+
     function renderTechDetail(technicians) {
       if (!selectedTechName) {
         techDetailEl.classList.add('hidden');
@@ -519,7 +550,7 @@
         '<div class="tech-detail-meta">' +
           (tech.on_duty ? 'On duty — updated ' + relativeTime(tech.location_updated_at) : 'Off duty') +
         '</div>' +
-        '<div class="tech-detail-note">Job status (what they’re working, for how long) is coming soon — not built yet.</div>' +
+        currentJobHtml(tech.current_job) +
         '<button class="' + (tech.on_duty ? 'off-duty-btn' : '') + '" id="duty-toggle-btn">' +
           (tech.on_duty ? 'Set Off Duty' : 'Set On Duty') +
         '</button>' +
