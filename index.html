@@ -137,6 +137,79 @@
       background: #1e293b;
     }
 
+    /* Added 2026-09-26: message-your-technician chat box on the tracking
+       screen. Polled on the same 15s cycle as the rest of tracking (see
+       TRACKING_POLL_MS) -- no separate timer. */
+    .chat-box {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 14px;
+      margin: 16px 0;
+      text-align: left;
+    }
+    .chat-header {
+      font-size: 12px;
+      font-weight: 700;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 10px;
+    }
+    .chat-messages {
+      max-height: 180px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .chat-empty {
+      color: #64748b;
+      font-size: 13px;
+      text-align: center;
+      padding: 6px 0;
+    }
+    .chat-bubble {
+      max-width: 82%;
+      padding: 8px 12px;
+      border-radius: 14px;
+      font-size: 14px;
+      line-height: 1.4;
+      word-wrap: break-word;
+    }
+    .chat-bubble.mine {
+      align-self: flex-end;
+      background: #2563EB;
+      color: #ffffff;
+      border-bottom-right-radius: 4px;
+    }
+    .chat-bubble.theirs {
+      align-self: flex-start;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #f1f5f9;
+      border-bottom-left-radius: 4px;
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 8px;
+    }
+    .chat-input-row input {
+      flex: 1;
+      margin-top: 0;
+      padding: 10px 14px;
+      border-radius: 999px;
+    }
+    .chat-input-row button {
+      width: auto;
+      margin-top: 0;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
     .spinner {
       width: 16px;
       height: 16px;
@@ -499,6 +572,15 @@
       <div id="tracking-map" class="tracking-map"></div>
 
       <p id="tracking-updated" style="margin-top:8px; font-size:14px; color:#94a3b8;"></p>
+
+      <div class="chat-box">
+        <div class="chat-header">Message your technician</div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Type a message…" maxlength="500">
+          <button id="chat-send-btn">Send</button>
+        </div>
+      </div>
 
       <button class="btn secondary" id="tracking-start-over-btn" style="margin-top: 20px;">Start Over</button>
     </div>
@@ -1452,12 +1534,15 @@
       currentJobStatus = 'requested'; // always true the instant a dispatch succeeds
       showScreen('tracking');
       updateTrackingDisplay(destination, technician);
+      resetChatState();
+      fetchMessages(currentJobId);
       stopTracking();
       trackingInterval = setInterval(async () => {
         const fresh = await fetchAssignedTechnician();
         if (currentJobId) {
           const status = await fetchJobStatus(currentJobId);
           if (status !== undefined) currentJobStatus = status;
+          fetchMessages(currentJobId);
         }
         if (fresh) updateTrackingDisplay(destination, fresh);
       }, TRACKING_POLL_MS);
@@ -1468,6 +1553,133 @@
         clearInterval(trackingInterval);
         trackingInterval = null;
       }
+    }
+
+    // ---- Message-your-technician chat (added 2026-09-26) ----
+    // Deliberately the simple version: an in-app text box, no Twilio/SMS
+    // involved (Twilio isn't even set up yet -- see project docs). Reads
+    // and writes both go through api/job-messages.js and
+    // api/send-message.js, never a direct Supabase call from the browser
+    // -- the `messages` table has RLS on with no anon policies at all, on
+    // purpose, same as `customers`/`payments`.
+    let seenMessageIds = new Set();
+    let firstMessageCheck = true;
+
+    function resetChatState() {
+      seenMessageIds = new Set();
+      firstMessageCheck = true;
+      const messagesEl = document.getElementById('chat-messages');
+      if (messagesEl) messagesEl.innerHTML = '';
+      const inputEl = document.getElementById('chat-input');
+      if (inputEl) inputEl.value = '';
+    }
+
+    // Escapes a customer's or tech's own typed text before it's dropped
+    // into innerHTML -- otherwise someone typing "<b>" into the chat box
+    // would inject real HTML into the other person's screen.
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    async function fetchMessages(jobId) {
+      if (!jobId) return;
+      try {
+        const response = await fetch(`/api/job-messages?job_id=${jobId}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        renderMessages(result.messages || []);
+      } catch (err) {
+        console.error('Could not fetch messages:', err);
+      }
+    }
+
+    function renderMessages(messages) {
+      const el = document.getElementById('chat-messages');
+      if (!el) return;
+
+      const newFromTech = messages.filter(m => !seenMessageIds.has(m.id) && m.sender === 'tech');
+      messages.forEach(m => seenMessageIds.add(m.id));
+
+      if (messages.length === 0) {
+        el.innerHTML = '<div class="chat-empty">No messages yet — say hi if you need anything.</div>';
+      } else {
+        el.innerHTML = messages.map(m => {
+          const cls = m.sender === 'customer' ? 'mine' : 'theirs';
+          return `<div class="chat-bubble ${cls}">${escapeHtml(m.body)}</div>`;
+        }).join('');
+        el.scrollTop = el.scrollHeight;
+      }
+
+      // Don't bark for messages that were already there on first load --
+      // only for ones that show up *while* the customer is watching.
+      if (newFromTech.length && !firstMessageCheck) playBarkAlert();
+      firstMessageCheck = false;
+    }
+
+    async function sendChatMessage() {
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (!text || !currentJobId) return;
+
+      input.value = '';
+      input.disabled = true;
+      try {
+        const response = await fetch('/api/send-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: currentJobId, sender: 'customer', body: text })
+        });
+        if (!response.ok) {
+          const result = await response.json().catch(() => ({}));
+          throw new Error(result.error || 'Send failed');
+        }
+        await fetchMessages(currentJobId);
+      } catch (err) {
+        console.error('Could not send message:', err);
+        input.value = text; // give it back so they don't lose what they typed
+      } finally {
+        input.disabled = false;
+        input.focus();
+      }
+    }
+
+    document.getElementById('chat-send-btn').addEventListener('click', sendChatMessage);
+    document.getElementById('chat-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+
+    // A short, playful two-note "arf-arf" -- synthesized in-browser with
+    // the Web Audio API, same technique as tech.html's new-job alert (no
+    // audio file to host, works offline). A quick pitch-drop on a square
+    // wave reads as a cute cartoon bark rather than a real recording,
+    // which fits the T&T mascots better than trying to fake a real dog.
+    function playBarkAlert() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const bark = (startTime) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(900, startTime);
+          osc.frequency.exponentialRampToValueAtTime(220, startTime + 0.09);
+          gain.gain.setValueAtTime(0.0001, startTime);
+          gain.gain.exponentialRampToValueAtTime(0.3, startTime + 0.015);
+          gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.13);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(startTime);
+          osc.stop(startTime + 0.14);
+        };
+        bark(ctx.currentTime);
+        bark(ctx.currentTime + 0.16);
+      } catch (err) {
+        console.warn('Could not play message sound:', err.message);
+      }
+      if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
     }
 
     document.getElementById('confirm-dispatch-btn').addEventListener('click', submitDispatch);
@@ -1651,6 +1863,7 @@
       document.getElementById('spare-check-start-over-btn').style.display = 'none';
       document.getElementById('dispatch-form').style.display = 'none';
       resetVehicleInfoForm();
+      resetChatState();
       document.getElementById('customer-name').value = '';
       document.getElementById('customer-phone').value = '';
       document.getElementById('dispatch-status').style.display = 'none';

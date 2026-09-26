@@ -127,3 +127,29 @@ grant select on technician_locations to anon;
 alter table jobs add column if not exists vehicle_year integer;
 alter table jobs add column if not exists vehicle_make text;
 alter table jobs add column if not exists vehicle_model text;
+
+-- 2026-09-26: Customer <-> technician in-app messaging. Run once, by hand,
+-- in the Supabase SQL Editor (Claude doesn't execute schema-modifying SQL
+-- directly, per this project's standing rule).
+--
+-- Deliberately NO RLS policies granting anon anything on this table --
+-- same treatment as `customers`/`payments`. All reads and writes go
+-- through two new serverless functions (api/send-message.js,
+-- api/job-messages.js) using the service-role key, same pattern as
+-- accept-job.js/active-jobs.js. This keeps one message thread from being
+-- readable by anyone else holding the public anon key, the same hard
+-- line the rest of this app's security is built around.
+create table messages (
+  id uuid primary key default gen_random_uuid(),
+  job_id uuid references jobs(id) not null,
+  sender text not null,  -- 'customer' | 'tech'
+  body text not null,
+  created_at timestamptz default now()
+);
+
+create index messages_job_id_idx on messages(job_id, created_at);
+
+alter table messages enable row level security;
+-- No policies created for anon on purpose -- see comment above. RLS is ON
+-- with zero policies, which means the anon key is flatly denied on this
+-- table; only the service-role key (used server-side only) can touch it.
