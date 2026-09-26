@@ -710,6 +710,22 @@
     const VPIC_TIMEOUT_MS = 8000;
     let cachedVehicleMakes = null; // fetched once, reused all visit (not year-dependent)
 
+    // Curated to the makes actually common on the Gulf Coast MS roads we
+    // service, instead of showing vPIC's full ~100-make list (which
+    // includes obscure/exotic/commercial brands nobody calling for
+    // roadside help is realistically driving -- added 2026-09-26 per
+    // Demian's request). vPIC returns make names in all caps, so this
+    // list is written the same way; the comparison below is
+    // case-insensitive anyway. Edit this list directly to add/remove a
+    // make later -- a typo just means that make silently won't show up,
+    // no error.
+    const COMMON_MAKES = [
+      'TOYOTA', 'FORD', 'CHEVROLET', 'GMC', 'DODGE', 'RAM', 'JEEP', 'CHRYSLER',
+      'HONDA', 'NISSAN', 'HYUNDAI', 'KIA', 'MITSUBISHI', 'SUBARU', 'MAZDA',
+      'BUICK', 'CADILLAC', 'LINCOLN', 'BMW', 'MERCEDES-BENZ', 'LEXUS', 'ACURA',
+      'INFINITI', 'VOLKSWAGEN', 'AUDI', 'VOLVO', 'MINI', 'TESLA'
+    ];
+
     function vpicFetch(path) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), VPIC_TIMEOUT_MS);
@@ -794,7 +810,9 @@
             if (item.MakeName) byName.set(item.MakeName.trim(), item.MakeName.trim());
           }
         }
-        cachedVehicleMakes = Array.from(byName.values()).sort((a, b) => a.localeCompare(b));
+        cachedVehicleMakes = Array.from(byName.values())
+          .filter(name => COMMON_MAKES.includes(name.toUpperCase()))
+          .sort((a, b) => a.localeCompare(b));
         if (cachedVehicleMakes.length === 0) throw new Error('No makes returned');
         fillMakeOptions(cachedVehicleMakes);
       } catch (err) {
