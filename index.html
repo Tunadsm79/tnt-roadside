@@ -74,7 +74,7 @@
       font-weight: 600;
     }
     .service-btn .sub {
-      font-size: 13px;
+      font-size: 14px;
       color: #94a3b8;
       margin-top: 2px;
     }
@@ -86,12 +86,27 @@
       padding: 24px;
     }
     .card h2 {
-      font-size: 18px;
-      margin-bottom: 8px;
+      font-size: 20px;
+      margin-bottom: 10px;
     }
+    /* 2026-09-26: bumped up from 14px/#94a3b8 -- Demian flagged this as too
+       small/hard to read, especially for elderly customers reading this
+       mid-emergency on a phone. #cbd5e1 is the same lighter gray already
+       used elsewhere on this page (.eta-box, .status-row) -- more contrast
+       against the dark card background than the old #94a3b8. */
     .card p {
-      color: #94a3b8;
-      font-size: 14px;
+      color: #cbd5e1;
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    /* For a line the customer actually has to read and act on right now
+       (a yes/no question, an important reassurance) -- brighter and a
+       touch bigger than ordinary card copy, with enough weight to draw
+       the eye. Add class="prompt-text" to a <p> inside a .card to use it. */
+    .prompt-text {
+      color: #f8fafc;
+      font-size: 17px;
+      font-weight: 600;
       line-height: 1.5;
     }
     .status-row {
@@ -109,7 +124,8 @@
       border-radius: 12px;
       padding: 14px 16px;
       margin: 16px 0;
-      font-size: 14px;
+      font-size: 15px;
+      line-height: 1.5;
       color: #cbd5e1;
     }
     .eta-box strong { color: #f8fafc; }
@@ -139,7 +155,7 @@
       border: 1px solid #334155;
       background: #0f172a;
       color: #f8fafc;
-      font-size: 15px;
+      font-size: 16px;
       margin-top: 12px;
     }
     input[type="text"]::placeholder { color: #64748b; }
@@ -151,7 +167,7 @@
       border: 1px solid #334155;
       background: #0f172a;
       color: #f8fafc;
-      font-size: 15px;
+      font-size: 16px;
       margin-top: 12px;
       appearance: none;
       -webkit-appearance: none;
@@ -188,7 +204,7 @@
       border: none;
       background: #2563EB;
       color: #ffffff;
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 700;
       cursor: pointer;
       margin-top: 16px;
@@ -383,7 +399,7 @@
       <p>We need your location to find the nearest tech and give you an accurate ETA.</p>
 
       <div id="tire-count-row" style="display:none; margin: 12px 0 -4px;">
-        <label for="tire-count" style="font-size:13px; color:#cbd5e1;">How many tires?</label><br>
+        <label for="tire-count" style="font-size:15px; color:#cbd5e1;">How many tires?</label><br>
         <input type="number" id="tire-count" min="1" max="6" value="1" style="width:80px;">
       </div>
 
@@ -394,7 +410,7 @@
 
       <button class="btn" id="use-location-btn">Use My Current Location</button>
 
-      <p style="margin-top:20px; font-size:13px;">Or enter your location manually:</p>
+      <p style="margin-top:20px;">Or enter your location manually:</p>
       <input type="text" id="manual-address" placeholder="Street address or nearest cross streets">
       <button class="btn secondary" id="manual-continue-btn">Continue with This Address</button>
     </div>
@@ -412,7 +428,7 @@
       <h2>Quick check before we dispatch</h2>
 
       <div id="spare-check-question-wrap">
-        <p id="spare-check-question"></p>
+        <p id="spare-check-question" class="prompt-text"></p>
         <button class="btn" id="spare-yes-btn">Yes, it's ready</button>
         <button class="btn secondary" id="spare-no-btn">No spare / tire available</button>
       </div>
@@ -438,7 +454,7 @@
 
       <div id="dispatch-form" style="display:none;">
         <div id="vehicle-info-section">
-          <p style="margin-top:16px; font-size:13px; color:#94a3b8;">
+          <p style="margin-top:16px; font-size:14px; color:#94a3b8;">
             Optional &mdash; helps your technician show up prepared:
           </p>
           <select class="vehicle-select" id="vehicle-year">
@@ -453,12 +469,12 @@
           <div id="vehicle-info-status" style="display:none; font-size:12px; margin-top:6px;"></div>
         </div>
 
-        <p style="margin-top:16px; font-size:13px; color:#94a3b8;">
+        <p class="prompt-text" style="margin-top:16px;">
           Your card is only being <strong>authorized</strong> right now &mdash;
           nothing is charged until the job's actually done. And your tech
           will have cold water waiting for you when they arrive.
         </p>
-        <p style="margin-top:16px; font-size:13px;">Last step &mdash; how should the tech reach you?</p>
+        <p style="margin-top:16px;">Last step &mdash; how should the tech reach you?</p>
         <input type="text" id="customer-name" placeholder="Your name">
         <input type="text" id="customer-phone" placeholder="Phone number">
         <div class="card-element-wrapper" id="card-element"></div>
@@ -482,7 +498,7 @@
 
       <div id="tracking-map" class="tracking-map"></div>
 
-      <p id="tracking-updated" style="margin-top:8px; font-size:13px;"></p>
+      <p id="tracking-updated" style="margin-top:8px; font-size:14px; color:#94a3b8;"></p>
 
       <button class="btn secondary" id="tracking-start-over-btn" style="margin-top: 20px;">Start Over</button>
     </div>
