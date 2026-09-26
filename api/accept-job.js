@@ -8,6 +8,18 @@
 // api/_notify.js -- no-ops until Twilio env vars are set). Same
 // service-role-key approach as complete-job.js/cancel-job.js -- see
 // complete-job.js's comment for why.
+//
+// 2026-09-26: now also records WHICH tech actually accepted. Jobs are a
+// shared pool -- any on-duty tech can accept any open job -- and
+// `technician_id` used to only ever get set once, at job creation, to
+// whichever tech selectTechnicianForDispatch() suggested. If a different
+// on-duty tech was the one who actually tapped Accept, `technician_id`
+// stayed wrong for that job's whole life (wrong "busy" counts in
+// available-technicians.js, wrong tech shown on the customer's live
+// tracking screen). This now overwrites `technician_id` with whoever
+// really accepted, and stamps `accepted_at` for admin's job-detail view.
+// tech.html sends `tech_name` (same field it already sends to
+// tech-heartbeat.js) so this can look up that tech's id.
 const { notifyStatusChange } = require('./_notify');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
@@ -52,9 +64,13 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const { job_id } = req.body || {};
+    const { job_id, tech_name } = req.body || {};
     if (!job_id) {
       res.status(400).json({ error: 'Missing job_id' });
+      return;
+    }
+    if (!tech_name) {
+      res.status(400).json({ error: 'Missing tech_name' });
       return;
     }
 
@@ -69,9 +85,20 @@ module.exports = async (req, res) => {
       return;
     }
 
+    const techs = await supabaseRequest(`/technicians?name=eq.${encodeURIComponent(tech_name)}&select=id`);
+    const tech = techs && techs[0];
+    if (!tech) {
+      res.status(400).json({ error: `No technician named "${tech_name}" found` });
+      return;
+    }
+
     await supabaseRequest(`/jobs?id=eq.${job_id}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: 'dispatched' })
+      body: JSON.stringify({
+        status: 'dispatched',
+        technician_id: tech.id,
+        accepted_at: new Date().toISOString()
+      })
     });
 
     await notifyStatusChange('dispatched', job, job.customers);
