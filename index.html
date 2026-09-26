@@ -1288,6 +1288,85 @@
     // working this job, not just "whichever tech happens to be active."
     let currentTechnicianId = null;
 
+    // ---- Resume-active-job-on-reload (added 2026-09-26) ----
+    // Everything above (currentJobId/currentTechnicianId/currentDestination)
+    // was plain in-memory JS state -- gone the instant the page reloaded,
+    // which is exactly what happens on a phone when the browser tab gets
+    // backgrounded/killed while switching apps. The customer would come
+    // back to a blank services-selection screen even though their job was
+    // still live on the server. Fix: mirror the handful of values needed to
+    // re-open the tracking screen into localStorage the moment a job is
+    // successfully dispatched, and check for them on every page load.
+    const ACTIVE_JOB_STORAGE_KEY = 'tnt_active_job';
+
+    function saveActiveJob() {
+      try {
+        localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, JSON.stringify({
+          jobId: currentJobId,
+          technicianId: currentTechnicianId,
+          destination: currentDestination,
+        }));
+      } catch (err) {
+        // Private-browsing mode, storage disabled, quota, etc. -- not
+        // fatal, the customer just won't get the resume-on-reload benefit.
+        console.warn('Could not save active job to localStorage:', err.message);
+      }
+    }
+
+    function clearSavedJob() {
+      try {
+        localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+      } catch (err) {
+        console.warn('Could not clear saved job from localStorage:', err.message);
+      }
+    }
+
+    // Runs once on every page load. If a job was saved and it's still
+    // actually active on the server, jumps straight back to the tracking
+    // screen instead of the services-selection start screen.
+    async function resumeActiveJobIfAny() {
+      let saved;
+      try {
+        saved = JSON.parse(localStorage.getItem(ACTIVE_JOB_STORAGE_KEY) || 'null');
+      } catch (err) {
+        saved = null;
+      }
+      if (!saved || !saved.jobId) return;
+
+      currentJobId = saved.jobId;
+      currentTechnicianId = saved.technicianId;
+      currentDestination = saved.destination;
+
+      const status = await fetchJobStatus(currentJobId);
+
+      if (status === null) {
+        // Job fell out of active_jobs_view -- it's completed or
+        // cancelled server-side. Nothing to resume; clear it so this
+        // check is a no-op on every future load.
+        currentJobId = null;
+        currentTechnicianId = null;
+        currentDestination = null;
+        clearSavedJob();
+        return;
+      }
+      if (status === undefined) {
+        // Fetch itself failed (offline, Supabase hiccup) -- don't wipe
+        // the saved job over a network blip. Just don't resume THIS
+        // load; the customer can reopen the app again once back online.
+        currentJobId = null;
+        currentTechnicianId = null;
+        currentDestination = null;
+        return;
+      }
+
+      currentJobStatus = status;
+      // technician may come back null if that tech isn't currently
+      // reporting as on-duty -- updateTrackingDisplay handles a
+      // stand-in object fine (just shows "waiting for location").
+      const technician = await fetchAssignedTechnician();
+      startTracking(currentDestination, technician || { name: null, current_lat: null, current_lng: null });
+    }
+
     async function fetchJobStatus(jobId) {
       try {
         const { data, error } = await supabaseClient
@@ -1541,6 +1620,17 @@
         const fresh = await fetchAssignedTechnician();
         if (currentJobId) {
           const status = await fetchJobStatus(currentJobId);
+          if (status === null) {
+            // Job wrapped up (completed/cancelled) server-side while this
+            // customer was watching the tracking screen. Stop polling,
+            // stop treating it as the "active job" for resume-on-reload,
+            // and take them back to the start screen rather than leaving
+            // them staring at a job that no longer exists.
+            stopTracking();
+            clearSavedJob();
+            resetToServices();
+            return;
+          }
           if (status !== undefined) currentJobStatus = status;
           fetchMessages(currentJobId);
         }
@@ -1835,6 +1925,7 @@
         // above if fetchActiveTechnician() came back empty, before ever
         // authorizing a card.
         startTracking(currentDestination, technician);
+        saveActiveJob();
       } catch (err) {
         console.error('Dispatch failed:', err);
         btn.disabled = false;
@@ -1880,6 +1971,7 @@
       currentEtaMinutes = null;
       currentPrice = null;
       etaOk = false;
+      clearSavedJob();
       showScreen('services');
     }
 
@@ -2006,6 +2098,11 @@
     // an older worker controlling it -- not on a first-ever visit, where
     // there's nothing stale to correct and an unprompted reload would
     // just be an unnecessary flash.
+    // Check for a job in progress every time this page loads (fresh visit,
+    // reload, or coming back from another app) -- see resumeActiveJobIfAny
+    // above for why this exists.
+    resumeActiveJobIfAny();
+
     if ('serviceWorker' in navigator) {
       const hadController = !!navigator.serviceWorker.controller;
       if (hadController) {
