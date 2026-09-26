@@ -50,7 +50,10 @@ module.exports = async (req, res) => {
         `&order=completed_at.desc` +
         `&limit=200`
       : `${SUPABASE_URL}/rest/v1/jobs` +
-        `?select=id,service_type,price,status,payment_status,created_at,completed_at,customer_address,customers(name,phone)` +
+        // technician_id added 2026-09-26 so admin.html's job-detail panel
+        // can show who's currently assigned (needed for the Cancel/
+        // Reassign controls added there the same day).
+        `?select=id,service_type,price,status,payment_status,created_at,completed_at,customer_address,technician_id,customers(name,phone)` +
         `&order=created_at.desc` +
         `&limit=500`;
 

@@ -138,7 +138,42 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
+      cursor: pointer;
     }
+    .job-card:active { opacity: 0.85; }
+    /* Job-detail expand panel (added 2026-09-26): tap a job card to open
+       this -- lets admin cancel the job (releases the Stripe hold) or
+       hand it to a different on-duty tech, without needing the tech's
+       phone at all. Same visual language as .tech-detail above. */
+    .job-detail {
+      margin-top: 4px;
+      padding-top: 10px;
+      border-top: 1px solid #334155;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      cursor: default;
+    }
+    .job-detail-row { font-size: 12px; color: #94a3b8; }
+    .job-detail-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .job-detail-actions button { width: auto; padding: 8px 14px; font-size: 13px; }
+    .job-detail-actions select {
+      flex: 1;
+      min-width: 140px;
+      padding: 8px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 13px;
+    }
+    button.danger { background: #b91c1c; }
+    button.danger:disabled { opacity: 0.5; }
     .job-service { font-size: 16px; font-weight: 800; }
     .job-badge {
       display: inline-block;
@@ -379,6 +414,9 @@
 
     let allJobs = [];
     let currentFilter = 'all';
+    // Which job's detail/action panel is open, if any (added 2026-09-26,
+    // same tap-to-expand pattern as selectedTechName above).
+    let selectedJobId = null;
     let techMap = null;
     const techMarkers = {}; // tech name -> google.maps.Marker
     let techPollInterval = null;
@@ -638,6 +676,125 @@
       renderList();
     });
 
+    // Tap a job card to open/close its Cancel/Reassign panel. Delegated
+    // (one listener, not one per card) since jobListEl gets rebuilt on
+    // every renderList() call. Ignores taps on the phone number link and
+    // on anything already inside an open detail panel -- those have
+    // their own handlers wired in wireJobDetailHandlers below.
+    jobListEl.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;
+      if (e.target.closest('.job-detail')) return;
+      const card = e.target.closest('.job-card');
+      if (!card || !card.dataset.jobId) return;
+      selectedJobId = (selectedJobId === card.dataset.jobId) ? null : card.dataset.jobId;
+      renderList();
+    });
+
+    // Admin control added 2026-09-26, per Demian: "what happens if the
+    // tech can't make it, loses his phone, quits" -- admin shouldn't be
+    // stuck waiting on the tech's own phone to cancel a job or hand it
+    // to someone else. Cancel reuses the same /api/cancel-job endpoint
+    // tech.html's Cancel Job button already calls (releases the Stripe
+    // hold, no money captured). Reassign reuses /api/accept-job with an
+    // admin_reassign flag (see that file's 2026-09-26 comment) instead
+    // of a new endpoint, to stay under Vercel's 12-function cap.
+    function currentTechName(job) {
+      if (!job.technician_id) return 'Unassigned';
+      const tech = (lastTechData || []).find(t => t.id === job.technician_id);
+      return tech ? tech.name : 'Assigned (not currently on duty)';
+    }
+
+    function jobDetailHtml(job) {
+      if (!ACTIVE_STATUSES.includes(job.status)) {
+        return '<div class="job-detail">' +
+          '<div class="job-detail-row">This job is ' + (STATUS_LABELS[job.status] || job.status).toLowerCase() +
+          ' — no actions available.</div></div>';
+      }
+
+      const onDutyTechs = (lastTechData || []).filter(t => t.on_duty);
+      const reassignOptions = onDutyTechs.length
+        ? onDutyTechs.map(t =>
+            '<option value="' + t.name + '"' + (t.id === job.technician_id ? ' selected' : '') + '>' +
+            t.name + '</option>'
+          ).join('')
+        : '<option value="">No on-duty technicians</option>';
+
+      return (
+        '<div class="job-detail">' +
+          '<div class="job-detail-row"><strong>Assigned:</strong> ' + currentTechName(job) + '</div>' +
+          '<div class="job-detail-actions">' +
+            '<select id="job-detail-reassign-select">' + reassignOptions + '</select>' +
+            '<button id="job-detail-reassign-btn"' + (onDutyTechs.length ? '' : ' disabled') + '>Reassign</button>' +
+          '</div>' +
+          '<div class="job-detail-actions">' +
+            '<button class="danger" id="job-detail-cancel-btn">Cancel Job &amp; Release Hold</button>' +
+          '</div>' +
+          '<span class="status error" id="job-detail-status" style="display:inline-block;"></span>' +
+        '</div>'
+      );
+    }
+
+    function wireJobDetailHandlers(job) {
+      const cancelBtn = document.getElementById('job-detail-cancel-btn');
+      const reassignBtn = document.getElementById('job-detail-reassign-btn');
+      const selectEl = document.getElementById('job-detail-reassign-select');
+      const statusEl = document.getElementById('job-detail-status');
+      if (!statusEl) return; // job was completed/cancelled -- no action panel to wire
+
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', async () => {
+          cancelBtn.disabled = true;
+          if (reassignBtn) reassignBtn.disabled = true;
+          statusEl.textContent = 'Cancelling…';
+          try {
+            const response = await fetch('/api/cancel-job', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ job_id: job.id })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Request failed');
+            // Job is gone from the active list now -- close the panel
+            // rather than leaving a stale one open on a cancelled job.
+            selectedJobId = null;
+            await loadJobs();
+          } catch (err) {
+            console.error('admin cancel-job failed:', err);
+            statusEl.textContent = 'Could not cancel: ' + err.message;
+            cancelBtn.disabled = false;
+            if (reassignBtn) reassignBtn.disabled = false;
+          }
+        });
+      }
+
+      if (reassignBtn) {
+        reassignBtn.addEventListener('click', async () => {
+          const techName = selectEl.value;
+          if (!techName) return;
+          reassignBtn.disabled = true;
+          if (cancelBtn) cancelBtn.disabled = true;
+          statusEl.textContent = 'Reassigning…';
+          try {
+            const response = await fetch('/api/accept-job', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ job_id: job.id, tech_name: techName, admin_reassign: true })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Request failed');
+            // Stays open (selectedJobId untouched) so the updated
+            // "Assigned:" line is visible right away.
+            await loadJobs();
+          } catch (err) {
+            console.error('admin reassign failed:', err);
+            statusEl.textContent = 'Could not reassign: ' + err.message;
+            reassignBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
+          }
+        });
+      }
+    }
+
     function customerOf(job) {
       const c = job.customers;
       if (!c) return null;
@@ -707,6 +864,8 @@
 
         const item = document.createElement('div');
         item.className = 'job-card';
+        item.dataset.jobId = job.id;
+        const isOpen = selectedJobId === job.id;
         item.innerHTML =
           '<div class="job-service">' + (SERVICE_LABELS[job.service_type] || job.service_type) +
           '<span class="job-badge ' + job.status + '">' + statusLabel + '</span></div>' +
@@ -715,8 +874,10 @@
           (job.customer_address ? '<div class="job-meta">' + job.customer_address + '</div>' : '') +
           (customer ? '<div class="job-meta">' + customer.name +
             (customer.phone ? ' &middot; <a href="tel:' + customer.phone + '" style="color:#93c5fd;">' + customer.phone + '</a>' : '') +
-            '</div>' : '');
+            '</div>' : '') +
+          (isOpen ? jobDetailHtml(job) : '');
         jobListEl.appendChild(item);
+        if (isOpen) wireJobDetailHandlers(job);
       });
     }
   </script>

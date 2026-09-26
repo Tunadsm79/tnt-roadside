@@ -20,6 +20,21 @@
 // really accepted, and stamps `accepted_at` for admin's job-detail view.
 // tech.html sends `tech_name` (same field it already sends to
 // tech-heartbeat.js) so this can look up that tech's id.
+//
+// 2026-09-26: also handles admin.html's "Reassign" action, via an
+// `admin_reassign: true` flag in the body. Demian's reasoning: a tech's
+// phone dies, they quit mid-shift, whatever -- admin needs to be able to
+// hand a job to someone else without waiting on the original tech to do
+// anything. This is the same underlying operation (set technician_id +
+// accepted_at, tell the customer someone's on it) as a normal accept, so
+// it reuses this endpoint instead of adding a 13th serverless function
+// and blowing Vercel's Hobby 12-function cap again (see all-jobs.js's
+// comment for that whole saga). The only real difference: a normal
+// accept only works from 'requested' (a fresh, nobody's-touched-it-yet
+// job); admin_reassign works from any non-terminal status, and always
+// resets status back to 'dispatched' even if the job was further along
+// (en_route/arrived) -- the newly-assigned tech hasn't actually done any
+// of that yet, so it would be a lie to leave the old status standing.
 const { notifyStatusChange } = require('./_notify');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
@@ -64,7 +79,7 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const { job_id, tech_name } = req.body || {};
+    const { job_id, tech_name, admin_reassign } = req.body || {};
     if (!job_id) {
       res.status(400).json({ error: 'Missing job_id' });
       return;
@@ -80,7 +95,12 @@ module.exports = async (req, res) => {
       res.status(404).json({ error: 'Job not found' });
       return;
     }
-    if (job.status !== 'requested') {
+    if (admin_reassign) {
+      if (job.status === 'completed' || job.status === 'cancelled') {
+        res.status(400).json({ error: `Job is already ${job.status} -- can't reassign it` });
+        return;
+      }
+    } else if (job.status !== 'requested') {
       res.status(400).json({ error: `Job is already ${job.status} -- can't accept it again` });
       return;
     }
@@ -103,7 +123,7 @@ module.exports = async (req, res) => {
 
     await notifyStatusChange('dispatched', job, job.customers);
 
-    res.status(200).json({ status: 'dispatched' });
+    res.status(200).json({ status: 'dispatched', admin_reassign: !!admin_reassign });
   } catch (err) {
     console.error('accept-job error:', err);
     res.status(500).json({ error: 'Could not accept job' });
