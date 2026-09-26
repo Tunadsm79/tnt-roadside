@@ -174,6 +174,46 @@
     }
     button.danger { background: #b91c1c; }
     button.danger:disabled { opacity: 0.5; }
+    /* Read-only view of the customer<->tech chat thread for a job,
+       added 2026-09-26 per Demian: "I want to be able to see whatever
+       message the customer is sending through the admin page" without
+       needing either phone. Reuses the same GET /api/messages endpoint
+       index.html/tech.html already poll -- no new serverless function. */
+    .job-messages {
+      max-height: 160px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 4px 2px;
+    }
+    .job-msg {
+      max-width: 85%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.35;
+      word-wrap: break-word;
+    }
+    .job-msg-sender {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      opacity: 0.7;
+      margin-bottom: 2px;
+    }
+    .job-msg.customer {
+      align-self: flex-start;
+      background: #1e293b;
+      border: 1px solid #334155;
+    }
+    .job-msg.tech {
+      align-self: flex-end;
+      background: #1e3a8a;
+      color: #dbeafe;
+    }
     .job-service { font-size: 16px; font-weight: 800; }
     .job-badge {
       display: inline-block;
@@ -417,6 +457,13 @@
     // Which job's detail/action panel is open, if any (added 2026-09-26,
     // same tap-to-expand pattern as selectedTechName above).
     let selectedJobId = null;
+    // Polling for the open job's message thread (added 2026-09-26, see
+    // the .job-messages CSS comment above for why). Separate from
+    // techPollInterval -- this only runs while a job's detail panel is
+    // actually open, and follows whichever job that is.
+    let jobMessagesPollInterval = null;
+    let jobMessagesPollJobId = null;
+    const JOB_MESSAGES_POLL_MS = 8000;
     let techMap = null;
     const techMarkers = {}; // tech name -> google.maps.Marker
     let techPollInterval = null;
@@ -448,11 +495,13 @@
     logoutBtn.addEventListener('click', () => {
       sessionStorage.removeItem('tnt-admin-unlocked');
       allJobs = [];
+      selectedJobId = null;
       pinInput.value = '';
       pinStatus.textContent = '';
       dashboardScreen.classList.add('hidden');
       pinScreen.classList.remove('hidden');
       stopTechPolling();
+      stopJobMessagesPolling();
     });
 
     refreshBtn.addEventListener('click', refreshAll);
@@ -686,7 +735,9 @@
       if (e.target.closest('.job-detail')) return;
       const card = e.target.closest('.job-card');
       if (!card || !card.dataset.jobId) return;
-      selectedJobId = (selectedJobId === card.dataset.jobId) ? null : card.dataset.jobId;
+      const wasOpen = selectedJobId === card.dataset.jobId;
+      selectedJobId = wasOpen ? null : card.dataset.jobId;
+      if (wasOpen) stopJobMessagesPolling();
       renderList();
     });
 
@@ -698,6 +749,60 @@
     // hold, no money captured). Reassign reuses /api/accept-job with an
     // admin_reassign flag (see that file's 2026-09-26 comment) instead
     // of a new endpoint, to stay under Vercel's 12-function cap.
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function stopJobMessagesPolling() {
+      if (jobMessagesPollInterval) {
+        clearInterval(jobMessagesPollInterval);
+        jobMessagesPollInterval = null;
+        jobMessagesPollJobId = null;
+      }
+    }
+
+    function startJobMessagesPolling(jobId) {
+      if (jobMessagesPollJobId === jobId) return; // already polling this exact job
+      stopJobMessagesPolling();
+      jobMessagesPollJobId = jobId;
+      loadJobMessages(jobId);
+      jobMessagesPollInterval = setInterval(() => loadJobMessages(jobId), JOB_MESSAGES_POLL_MS);
+    }
+
+    async function loadJobMessages(jobId) {
+      try {
+        const response = await fetch('/api/messages?job_id=' + encodeURIComponent(jobId));
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        renderJobMessages(result.messages || []);
+      } catch (err) {
+        console.error('admin loadJobMessages failed:', err);
+        const el = document.getElementById('job-detail-messages');
+        if (el) el.innerHTML = '<div class="job-detail-row">Could not load messages.</div>';
+      }
+    }
+
+    function renderJobMessages(messages) {
+      // The panel may have been closed (or the job filtered out of view)
+      // since this fetch started -- just drop the update rather than
+      // erroring on a missing element.
+      const el = document.getElementById('job-detail-messages');
+      if (!el) return;
+      if (messages.length === 0) {
+        el.innerHTML = '<div class="job-detail-row">No messages yet.</div>';
+        return;
+      }
+      el.innerHTML = messages.map(m =>
+        '<div class="job-msg ' + (m.sender === 'tech' ? 'tech' : 'customer') + '">' +
+          '<span class="job-msg-sender">' + (m.sender === 'tech' ? 'Tech' : 'Customer') + '</span>' +
+          escapeHtml(m.body) +
+        '</div>'
+      ).join('');
+      el.scrollTop = el.scrollHeight;
+    }
+
     function currentTechName(job) {
       if (!job.technician_id) return 'Unassigned';
       const tech = (lastTechData || []).find(t => t.id === job.technician_id);
@@ -705,10 +810,17 @@
     }
 
     function jobDetailHtml(job) {
+      // Shown for every job regardless of status -- reviewing what was
+      // actually said on a completed or cancelled job is still useful
+      // (a dispute, a "why did this get cancelled" question later).
+      const messagesHtml =
+        '<div class="job-detail-row"><strong>Messages</strong></div>' +
+        '<div class="job-messages" id="job-detail-messages"><div class="job-detail-row">Loading…</div></div>';
+
       if (!ACTIVE_STATUSES.includes(job.status)) {
-        return '<div class="job-detail">' +
+        return '<div class="job-detail">' + messagesHtml +
           '<div class="job-detail-row">This job is ' + (STATUS_LABELS[job.status] || job.status).toLowerCase() +
-          ' — no actions available.</div></div>';
+          ' — no further actions available.</div></div>';
       }
 
       const onDutyTechs = (lastTechData || []).filter(t => t.on_duty);
@@ -721,6 +833,7 @@
 
       return (
         '<div class="job-detail">' +
+          messagesHtml +
           '<div class="job-detail-row"><strong>Assigned:</strong> ' + currentTechName(job) + '</div>' +
           '<div class="job-detail-actions">' +
             '<select id="job-detail-reassign-select">' + reassignOptions + '</select>' +
@@ -735,6 +848,12 @@
     }
 
     function wireJobDetailHandlers(job) {
+      // Messages panel is present whether or not this job has action
+      // buttons (a completed/cancelled job still shows its message
+      // history), so this always runs, ahead of the action-button guard
+      // below.
+      startJobMessagesPolling(job.id);
+
       const cancelBtn = document.getElementById('job-detail-cancel-btn');
       const reassignBtn = document.getElementById('job-detail-reassign-btn');
       const selectEl = document.getElementById('job-detail-reassign-select');
@@ -754,9 +873,10 @@
             });
             const result = await response.json();
             if (!response.ok) throw new Error(result.error || 'Request failed');
-            // Job is gone from the active list now -- close the panel
-            // rather than leaving a stale one open on a cancelled job.
-            selectedJobId = null;
+            // Leave the panel open (selectedJobId untouched) -- the
+            // re-render below will show it in its new "Cancelled, no
+            // actions available" state, with the message history still
+            // visible rather than the panel just vanishing.
             await loadJobs();
           } catch (err) {
             console.error('admin cancel-job failed:', err);

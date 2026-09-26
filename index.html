@@ -156,6 +156,18 @@
       letter-spacing: 0.05em;
       margin-bottom: 10px;
     }
+    /* Status line ("Jonathan accepted your job" / "...is on the way" /
+       "...has arrived"), relocated 2026-09-26 to live inside the chat box
+       right above the message thread instead of by itself near the top
+       of the screen. */
+    .chat-status-line {
+      font-size: 13px;
+      color: #cbd5e1;
+      text-align: center;
+      padding-bottom: 10px;
+      margin-bottom: 10px;
+      border-bottom: 1px solid #334155;
+    }
     .chat-messages {
       max-height: 180px;
       overflow-y: auto;
@@ -565,7 +577,6 @@
   <main class="screen" id="screen-tracking">
     <div class="card">
       <h2>Help is on the way</h2>
-      <p id="tracking-tech-name">Your technician has been notified.</p>
 
       <div class="eta-box" id="tracking-eta" style="display:block;">Waiting for technician location&hellip;</div>
 
@@ -575,6 +586,14 @@
 
       <div class="chat-box">
         <div class="chat-header">Message your technician</div>
+        <!-- Moved here 2026-09-26 per Demian: the "Jonathan accepted the
+             job" / "Jonathan is on the way" status line used to sit up by
+             itself near the top of the screen, disconnected from the
+             actual conversation. Same element, same updateTrackingDisplay
+             logic setting its text on every status change -- just
+             relocated so it reads as part of the chat thread instead of a
+             separate line. -->
+        <p id="tracking-tech-name" class="chat-status-line">Your technician has been notified.</p>
         <div class="chat-messages" id="chat-messages"></div>
         <div class="chat-input-row">
           <input type="text" id="chat-input" placeholder="Type a message…" maxlength="500">
