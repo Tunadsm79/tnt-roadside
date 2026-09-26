@@ -5,7 +5,7 @@
 // right now, and a customer stuck on a stale cached version mid-build
 // would be worse than no caching at all.
 
-const CACHE_NAME = 'tnt-roadside-v5';
+const CACHE_NAME = 'tnt-roadside-v6';
 const CORE_ASSETS = [
   '/',
   '/hub.html',
@@ -17,7 +17,10 @@ const CORE_ASSETS = [
   '/admin.html',
   '/admin-manifest.json',
   '/icons/icon-192.png',
-  '/icons/icon-512.png'
+  '/icons/icon-512.png',
+  '/icons/icon-192-maskable.png',
+  '/icons/icon-512-maskable.png',
+  '/icons/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {
