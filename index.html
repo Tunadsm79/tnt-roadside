@@ -200,6 +200,32 @@
       font-size: 13px;
       text-align: center;
     }
+    .duty-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      font-size: 13px;
+      color: #cbd5e1;
+    }
+    .duty-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+      flex-shrink: 0;
+    }
+    .duty-dot.on {
+      background: #16a34a;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2);
+    }
+    .duty-dot.off {
+      background: #f87171;
+    }
     .tech-login-link {
       display: inline-block;
       margin-top: 14px;
@@ -277,6 +303,10 @@
   <header>
     <h1>T&amp;T <span>Roadside</span></h1>
     <p>Mobile roadside help &mdash; Gulfport &amp; Biloxi, MS</p>
+    <div class="duty-indicator" id="duty-indicator">
+      <span class="duty-dot" id="duty-dot"></span>
+      <span id="duty-text">Checking technician availability&hellip;</span>
+    </div>
     <a class="tech-login-link" href="/tech.html">Tech Login</a>
   </header>
 
@@ -593,6 +623,7 @@
       const priceEl = document.getElementById('price-result');
       etaEl.style.display = 'block';
       etaEl.textContent = 'Calculating your ETA\u2026';
+      delete etaEl.dataset.estimatedLabelAdded;
       priceEl.style.display = 'none';
       etaOk = false;
       document.getElementById('dispatch-form').style.display = 'none';
@@ -636,7 +667,114 @@
           `<strong>Estimated arrival: ${result.duration.text}</strong><br>${result.distance.text} away`;
 
         showPrice();
+        // This is the Bayberry-based estimate (always used for the
+        // service-area/radius gate above -- that does NOT change).
+        // Now try to replace the *displayed* ETA with a realistic one
+        // based on an actual on-duty technician's live position and
+        // current workload, if we have one. If we don't, the Bayberry
+        // number already shown above stays -- refineEtaForCustomer just
+        // labels it clearly as an estimate rather than replacing it.
+        refineEtaForCustomer(destination);
       });
+    }
+
+    // ---- Realistic tech-availability-based ETA (shown to customer,
+    // before payment) -- added 2026-09-26 ----
+    // Does NOT affect the service-area/radius check above, which always
+    // uses TECH_BASE_LOCATION (Bayberry) as the origin, on purpose --
+    // this only refines what ETA text the customer sees once they're
+    // already confirmed to be in range.
+    async function refineEtaForCustomer(destination) {
+      const etaEl = document.getElementById('eta-result');
+      let onDutyTechs = [];
+      try {
+        const response = await fetch('/api/available-technicians');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        onDutyTechs = result.technicians || [];
+      } catch (err) {
+        console.error('Could not refine ETA with technician availability:', err);
+        labelEtaAsEstimated(etaEl, 'technician availability could not be checked');
+        return;
+      }
+
+      if (onDutyTechs.length === 0) {
+        labelEtaAsEstimated(etaEl, 'no technician currently on duty');
+        return;
+      }
+
+      const withLocation = onDutyTechs.filter(
+        t => t.current_lat != null && t.current_lng != null
+      );
+      if (withLocation.length === 0 || !distanceService) {
+        labelEtaAsEstimated(etaEl, 'technician location not yet available');
+        return;
+      }
+
+      distanceService.getDistanceMatrix({
+        origins: withLocation.map(t => ({ lat: t.current_lat, lng: t.current_lng })),
+        destinations: [destination],
+        travelMode: google.maps.TravelMode.DRIVING,
+        unitSystem: google.maps.UnitSystem.IMPERIAL,
+      }, (response, status) => {
+        if (status !== 'OK') {
+          labelEtaAsEstimated(etaEl, "technician drive time couldn't be calculated");
+          return;
+        }
+
+        const ranked = withLocation
+          .map((tech, i) => ({ tech, result: response.rows[i].elements[0] }))
+          .filter(r => r.result && r.result.status === 'OK')
+          .sort((a, b) => a.result.duration.value - b.result.duration.value);
+
+        if (ranked.length === 0) {
+          labelEtaAsEstimated(etaEl, "technician drive time couldn't be calculated");
+          return;
+        }
+
+        // Same "prefer the nearest free tech" logic as actual dispatch
+        // routing (selectTechnicianForDispatch below) -- kept as its own
+        // separate, simpler copy here on purpose, so this display-only
+        // refinement can never affect (or be affected by) the real
+        // dispatch-time technician selection.
+        const nearestFree = ranked.find(r => !r.tech.busy);
+        const picked = nearestFree || ranked[0];
+        const driveMinutes = Math.round(picked.result.duration.value / 60);
+        const remainingMinutes = picked.tech.remaining_minutes || 0;
+        const BUFFER_MINUTES = 5;
+
+        // Formula: estimated arrival = remaining time on their current
+        // job (0 if free) + drive time + a 5-minute buffer. Shown as a
+        // range (low = if they were free right now, high = accounting
+        // for finishing up current work first) rather than one number,
+        // since this is genuinely an estimate.
+        const low = driveMinutes + BUFFER_MINUTES;
+        const high = remainingMinutes + driveMinutes + BUFFER_MINUTES;
+        const rangeText = high > low ? `${low}–${high} min` : `${low} min`;
+        const busyNote = remainingMinutes > 0
+          ? ` — they're wrapping up another job first`
+          : '';
+
+        etaEl.innerHTML =
+          `<strong>Estimated arrival: ${rangeText}</strong>${busyNote}<br>` +
+          `${picked.result.distance.text} from your technician`;
+      });
+    }
+
+    // Appends a small "estimated, here's why" note under the ETA box
+    // WITHOUT touching the number already shown (which came from the
+    // real Bayberry-based DistanceMatrix call in calculateEta above) --
+    // used whenever there's no on-duty/located technician to give a
+    // more realistic number instead.
+    function labelEtaAsEstimated(etaEl, reason) {
+      if (etaEl.dataset.estimatedLabelAdded === '1') return;
+      etaEl.dataset.estimatedLabelAdded = '1';
+      const note = document.createElement('div');
+      note.style.marginTop = '6px';
+      note.style.fontSize = '12px';
+      note.style.color = '#94a3b8';
+      note.textContent = `Estimated — based on our home base (${reason}).`;
+      etaEl.appendChild(note);
     }
 
     function showPrice() {
@@ -704,6 +842,11 @@
     // actually confirmed they're coming.
     let currentJobId = null;
     let currentJobStatus = 'requested';
+    // Which technician this job was actually assigned to at dispatch --
+    // set in submitDispatch, used by the tracking poll below (added
+    // 2026-09-26) so the live tracking screen follows the SPECIFIC tech
+    // working this job, not just "whichever tech happens to be active."
+    let currentTechnicianId = null;
 
     async function fetchJobStatus(jobId) {
       try {
@@ -782,16 +925,31 @@
       }
     }
 
-    async function fetchActiveTechnician() {
+    // Replaces the old fetchActiveTechnician(), which queried the
+    // technician_locations view filtered on the stale `active` column --
+    // that column only tracks a single legacy "dispatchable" technician
+    // (Demian) and doesn't reflect who a given job actually went to now
+    // that multiple techs can be on duty (see the project doc's
+    // "Dispatch routing fix" section). With two-plus real technicians,
+    // that old query could silently keep showing the WRONG tech's
+    // position on a customer's tracking screen. Fixed 2026-09-26: look
+    // up the specific technician this job was assigned to
+    // (currentTechnicianId, set in submitDispatch) by id, from the same
+    // on-duty-technicians endpoint dispatch routing itself uses.
+    //
+    // Known, accepted limitation: this endpoint only returns ON-DUTY
+    // technicians. If the assigned tech logs out mid-job (should be
+    // rare), they won't be found here and this poll cycle simply skips
+    // updating (same graceful "leave the last known display as-is"
+    // behavior this code already had) rather than erroring.
+    async function fetchAssignedTechnician() {
+      if (!currentTechnicianId) return null;
       try {
-        const { data, error } = await supabaseClient
-          .from('technician_locations')
-          .select('id, name, current_lat, current_lng, location_updated_at')
-          .eq('active', true)
-          .limit(1)
-          .maybeSingle();
-        if (error || !data) return null;
-        return data;
+        const response = await fetch('/api/available-technicians');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        const techs = result.technicians || [];
+        return techs.find(t => t.id === currentTechnicianId) || null;
       } catch (err) {
         console.error('Could not fetch technician location:', err);
         return null;
@@ -938,7 +1096,7 @@
       updateTrackingDisplay(destination, technician);
       stopTracking();
       trackingInterval = setInterval(async () => {
-        const fresh = await fetchActiveTechnician();
+        const fresh = await fetchAssignedTechnician();
         if (currentJobId) {
           const status = await fetchJobStatus(currentJobId);
           if (status !== undefined) currentJobStatus = status;
@@ -992,6 +1150,7 @@
       const customerAddress = (currentDestination && typeof currentDestination === 'string') ? currentDestination : null;
 
       const technician = await selectTechnicianForDispatch();
+      currentTechnicianId = technician ? technician.id : null;
 
       // Don't take a customer's money (or falsely tell them help is on
       // the way) if there's no technician actually available to send --
@@ -1143,6 +1302,49 @@
       stopTracking();
       resetToServices();
     });
+
+    // ---- "Tech on duty" indicator (added 2026-09-26) ----
+    // Small, unobtrusive status pill near the top of the page. Runs
+    // independently of the service-selection flow -- doesn't need a
+    // service picked, doesn't need Google Maps loaded, and doesn't
+    // block or get blocked by anything else on the page. Uses the same
+    // /api/available-technicians endpoint the dispatch flow already
+    // relies on, so "on duty" here means the same thing it means
+    // everywhere else in this app.
+    async function refreshDutyIndicator() {
+      const dot = document.getElementById('duty-dot');
+      const text = document.getElementById('duty-text');
+      try {
+        const response = await fetch('/api/available-technicians');
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        const techs = result.technicians || [];
+
+        if (techs.length === 0) {
+          dot.className = 'duty-dot off';
+          text.textContent = 'No technician on duty right now';
+          return;
+        }
+
+        const withLocation = techs.filter(t => t.current_lat != null && t.current_lng != null);
+        dot.className = 'duty-dot on';
+        if (techs.length === 1) {
+          text.textContent = withLocation.length
+            ? '1 technician on duty'
+            : '1 technician on duty (location pending)';
+        } else {
+          text.textContent = withLocation.length === techs.length
+            ? `${techs.length} technicians on duty`
+            : `${techs.length} technicians on duty (some locations pending)`;
+        }
+      } catch (err) {
+        console.error('Could not check technician duty status:', err);
+        dot.className = 'duty-dot';
+        text.textContent = 'Technician availability unknown';
+      }
+    }
+    refreshDutyIndicator();
+    setInterval(refreshDutyIndicator, 30000);
   </script>
   <script>
     (function () {
