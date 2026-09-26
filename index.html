@@ -400,6 +400,34 @@
     </div>
   </main>
 
+  <!-- Screen 2.5: spare-tire availability check -- flat-tire jobs only.
+       Added 2026-09-26: no point dispatching a tech to a flat-tire call if
+       the customer doesn't actually have a spare/replacement tire ready --
+       that's a wasted trip. Asked once per flat tire (selectedService.tireCount
+       of them), not once for the whole job, since a multi-flat job could have
+       a spare for one tire but not another. -->
+  <main class="screen" id="screen-spare-check">
+    <button class="back-link" id="back-to-location-from-spare">&larr; Back</button>
+    <div class="card">
+      <h2>Quick check before we dispatch</h2>
+
+      <div id="spare-check-question-wrap">
+        <p id="spare-check-question"></p>
+        <button class="btn" id="spare-yes-btn">Yes, it's ready</button>
+        <button class="btn secondary" id="spare-no-btn">No spare / tire available</button>
+      </div>
+
+      <!-- Shown instead of the question once we know at least one flat has
+           no spare/replacement ready. Pricing for the "we take it to a shop
+           and bring it back" service isn't decided yet, so this is just a
+           placeholder pointing the customer to call in -- no price, no
+           dispatch, no payment form. -->
+      <div class="eta-box" id="spare-check-result" style="display:none;"></div>
+
+      <button class="btn secondary" id="spare-check-start-over-btn" style="display:none; margin-top: 20px;">Start Over</button>
+    </div>
+  </main>
+
   <!-- Screen 3: confirmation -->
   <main class="screen" id="screen-confirm">
     <div class="card">
@@ -758,6 +786,7 @@
     const screens = {
       services: document.getElementById('screen-services'),
       location: document.getElementById('screen-location'),
+      spareCheck: document.getElementById('screen-spare-check'),
       confirm: document.getElementById('screen-confirm'),
       tracking: document.getElementById('screen-tracking'),
     };
@@ -827,23 +856,109 @@
       finishLocationStep(`Address entered: "${address}"`, address);
     });
 
+    // Tracks the per-flat-tire spare-availability answers for the current
+    // flat-tire job. spareCheckAnswers[i] is true/false for tire #(i+1);
+    // spareCheckIndex is which tire we're currently asking about.
+    let spareCheckAnswers = [];
+    let spareCheckIndex = 0;
+    // Location info gets stashed here while the spare-tire questions (if
+    // any) are being answered, so proceedToConfirm() can pick up right
+    // where finishLocationStep() left off once they're done.
+    let pendingLocationSummary = '';
+
     function finishLocationStep(locationSummary, destination) {
+      currentDestination = destination;
+      pendingLocationSummary = locationSummary;
+
       if (selectedService.id === 'flat_tire') {
         selectedService.tireCount =
           parseInt(document.getElementById('tire-count').value, 10) || 1;
+        spareCheckAnswers = [];
+        spareCheckIndex = 0;
+        document.getElementById('dispatch-form').style.display = 'none';
+        document.getElementById('dispatch-status').style.display = 'none';
+        document.getElementById('dispatch-status').textContent = '';
+        showScreen('spareCheck');
+        askNextSpareQuestion();
+        return;
       }
+
+      proceedToConfirm(locationSummary, destination);
+    }
+
+    // Called once we know the job is good to actually price/ETA/dispatch --
+    // either it was never a flat-tire job, or it was and every flat tire
+    // has a spare/replacement ready.
+    function proceedToConfirm(locationSummary, destination) {
       const tireNote = selectedService.id === 'flat_tire'
         ? ` (${selectedService.tireCount} tire${selectedService.tireCount > 1 ? 's' : ''})`
         : '';
       document.getElementById('confirm-summary').textContent =
         `Service: ${selectedService.label}${tireNote}. ${locationSummary}.`;
-      currentDestination = destination;
       document.getElementById('dispatch-form').style.display = 'none';
       document.getElementById('dispatch-status').style.display = 'none';
       document.getElementById('dispatch-status').textContent = '';
       showScreen('confirm');
       calculateEta(destination);
     }
+
+    // ---- Spare-tire availability check (flat-tire jobs only) ----
+
+    function askNextSpareQuestion() {
+      document.getElementById('spare-check-result').style.display = 'none';
+      document.getElementById('spare-check-start-over-btn').style.display = 'none';
+      document.getElementById('spare-check-question-wrap').style.display = 'block';
+
+      const total = selectedService.tireCount;
+      const num = spareCheckIndex + 1;
+      const label = total > 1 ? `tire #${num} of ${total}` : 'your flat tire';
+      document.getElementById('spare-check-question').textContent =
+        `Do you have a spare or replacement tire ready to go for ${label}?`;
+    }
+
+    function answerSpareQuestion(hasSpare) {
+      spareCheckAnswers.push(hasSpare);
+      spareCheckIndex++;
+
+      if (spareCheckIndex < selectedService.tireCount) {
+        askNextSpareQuestion();
+        return;
+      }
+
+      const allHaveSpares = spareCheckAnswers.every(a => a === true);
+      if (allHaveSpares) {
+        proceedToConfirm(pendingLocationSummary, currentDestination);
+        return;
+      }
+
+      showNoSpareMessage();
+    }
+
+    // At least one flat tire has no spare/replacement ready. We're not
+    // dispatching or pricing this yet -- the "pull the tire, take it to a
+    // shop, bring it back and install it" service exists as an idea but
+    // pricing for it isn't decided (2026-09-26). For now this just tells
+    // the customer to call in rather than letting them book/pay online.
+    function showNoSpareMessage() {
+      const missingCount = spareCheckAnswers.filter(a => a === false).length;
+      document.getElementById('spare-check-question-wrap').style.display = 'none';
+      const resultEl = document.getElementById('spare-check-result');
+      resultEl.style.display = 'block';
+      const themOrIt = missingCount > 1 ? 'them' : 'it';
+      resultEl.innerHTML =
+        `<strong>Looks like ${missingCount > 1 ? missingCount + ' of your tires don’t' : 'you don’t'} have a spare/replacement ready.</strong><br>` +
+        `We can still help with that &mdash; we offer a service where we take ${themOrIt} off, get ${themOrIt} sorted at a shop, ` +
+        `and bring ${themOrIt} back to install &mdash; but that has to be set up directly rather than booked here online. ` +
+        `Please give us a call to arrange it.`;
+      document.getElementById('spare-check-start-over-btn').style.display = 'block';
+    }
+
+    document.getElementById('spare-yes-btn').addEventListener('click', () => answerSpareQuestion(true));
+    document.getElementById('spare-no-btn').addEventListener('click', () => answerSpareQuestion(false));
+
+    document.getElementById('back-to-location-from-spare').addEventListener('click', () => {
+      showScreen('location');
+    });
 
     function calculateEta(destination) {
       const etaEl = document.getElementById('eta-result');
@@ -1511,6 +1626,13 @@
       document.getElementById('price-result').textContent = '';
       document.getElementById('tire-count-row').style.display = 'none';
       document.getElementById('tire-count').value = '1';
+      spareCheckAnswers = [];
+      spareCheckIndex = 0;
+      document.getElementById('spare-check-question-wrap').style.display = 'block';
+      document.getElementById('spare-check-question').textContent = '';
+      document.getElementById('spare-check-result').style.display = 'none';
+      document.getElementById('spare-check-result').innerHTML = '';
+      document.getElementById('spare-check-start-over-btn').style.display = 'none';
       document.getElementById('dispatch-form').style.display = 'none';
       resetVehicleInfoForm();
       document.getElementById('customer-name').value = '';
@@ -1532,6 +1654,7 @@
     }
 
     document.getElementById('start-over-btn').addEventListener('click', resetToServices);
+    document.getElementById('spare-check-start-over-btn').addEventListener('click', resetToServices);
 
     document.getElementById('tracking-start-over-btn').addEventListener('click', () => {
       stopTracking();
