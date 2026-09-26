@@ -144,6 +144,28 @@
     }
     input[type="text"]::placeholder { color: #64748b; }
 
+    select.vehicle-select {
+      width: 100%;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 15px;
+      margin-top: 12px;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%2394a3b8'><path d='M5.5 7.5l4.5 5 4.5-5z'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      background-size: 16px;
+    }
+    select.vehicle-select:disabled {
+      color: #64748b;
+      cursor: not-allowed;
+    }
+    select.vehicle-select:invalid { color: #64748b; }
+
     .card-element-wrapper {
       padding: 14px;
       border-radius: 10px;
@@ -387,6 +409,22 @@
       <div class="eta-box" id="price-result"></div>
 
       <div id="dispatch-form" style="display:none;">
+        <div id="vehicle-info-section">
+          <p style="margin-top:16px; font-size:13px; color:#94a3b8;">
+            Optional &mdash; helps your technician show up prepared:
+          </p>
+          <select class="vehicle-select" id="vehicle-year">
+            <option value="">Vehicle year</option>
+          </select>
+          <select class="vehicle-select" id="vehicle-make" disabled>
+            <option value="">Make</option>
+          </select>
+          <select class="vehicle-select" id="vehicle-model" disabled>
+            <option value="">Model</option>
+          </select>
+          <div id="vehicle-info-status" style="display:none; font-size:12px; margin-top:6px;"></div>
+        </div>
+
         <p style="margin-top:16px; font-size:13px; color:#94a3b8;">
           Your card is only being <strong>authorized</strong> right now &mdash;
           nothing is charged until the job's actually done. And your tech
@@ -527,6 +565,195 @@
     let currentEtaMinutes = null;
     let currentPrice = null;
     let etaOk = false;
+
+    // ---- Vehicle Information: Year -> Make -> Model, added 2026-09-26 ----
+    // Uses the free NHTSA vPIC vehicle API (vpic.nhtsa.dot.gov) instead of
+    // maintaining our own make/model list. Optional field -- if NHTSA is
+    // slow or down, the customer can still submit their request; we just
+    // won't have vehicle info for the tech on that job.
+    //
+    // Honest limitation: vPIC has no "makes for a given year" endpoint --
+    // only "makes for a vehicle type" (not year-specific) and "models for
+    // a given make + year" (which IS year-specific). So the practical
+    // cascade here is: Year picked first (just to know what to filter
+    // models by later) -> Make list loaded from vPIC's car/truck/MPV
+    // categories (same list regardless of year) -> Model list loaded from
+    // vPIC filtered to that exact make + year. The Year -> Model link is
+    // real; the Year -> Make link is really just sequencing the UI.
+    const VPIC_BASE = 'https://vpic.nhtsa.dot.gov/api/vehicles';
+    const VPIC_TIMEOUT_MS = 8000;
+    let cachedVehicleMakes = null; // fetched once, reused all visit (not year-dependent)
+
+    function vpicFetch(path) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), VPIC_TIMEOUT_MS);
+      return fetch(`${VPIC_BASE}${path}`, { signal: controller.signal })
+        .finally(() => clearTimeout(timeoutId));
+    }
+
+    function populateVehicleYears() {
+      const yearSelect = document.getElementById('vehicle-year');
+      const currentYear = new Date().getFullYear();
+      // Covers virtually every vehicle likely to call for roadside help --
+      // NHTSA's own model-year data doesn't reliably go back much further
+      // than this anyway.
+      for (let y = currentYear + 1; y >= 1980; y--) {
+        const opt = document.createElement('option');
+        opt.value = String(y);
+        opt.textContent = String(y);
+        yearSelect.appendChild(opt);
+      }
+    }
+    populateVehicleYears();
+
+    function setVehicleStatus(message, isError) {
+      const statusEl = document.getElementById('vehicle-info-status');
+      if (!message) {
+        statusEl.style.display = 'none';
+        statusEl.textContent = '';
+        return;
+      }
+      statusEl.style.display = 'block';
+      statusEl.style.color = isError ? '#f87171' : '#94a3b8';
+      statusEl.textContent = message;
+    }
+
+    function resetVehicleSelect(selectEl, placeholder) {
+      selectEl.innerHTML = '';
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = placeholder;
+      selectEl.appendChild(opt);
+      selectEl.disabled = true;
+    }
+
+    function fillMakeOptions(makes) {
+      const makeSelect = document.getElementById('vehicle-make');
+      resetVehicleSelect(makeSelect, 'Make');
+      makeSelect.disabled = false;
+      for (const name of makes) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        makeSelect.appendChild(opt);
+      }
+    }
+
+    async function loadVehicleMakes() {
+      const makeSelect = document.getElementById('vehicle-make');
+      resetVehicleSelect(makeSelect, 'Loading makes…');
+      setVehicleStatus('', false);
+
+      if (cachedVehicleMakes) {
+        fillMakeOptions(cachedVehicleMakes);
+        return;
+      }
+
+      try {
+        // Three vehicle-type categories cover the cars/trucks/SUVs a
+        // roadside service actually deals with, instead of vPIC's full
+        // make list (which also includes trailers, motorcycles, buses,
+        // etc. and would make for an enormous, mostly-irrelevant dropdown).
+        const types = ['car', 'truck', 'multipurpose passenger vehicle (mpv)'];
+        const responses = await Promise.all(
+          types.map(t => vpicFetch(`/GetMakesForVehicleType/${encodeURIComponent(t)}?format=json`))
+        );
+        for (const r of responses) {
+          if (!r.ok) throw new Error(`NHTSA request failed (${r.status})`);
+        }
+        const datasets = await Promise.all(responses.map(r => r.json()));
+        const byName = new Map();
+        for (const dataset of datasets) {
+          for (const item of (dataset.Results || [])) {
+            if (item.MakeName) byName.set(item.MakeName.trim(), item.MakeName.trim());
+          }
+        }
+        cachedVehicleMakes = Array.from(byName.values()).sort((a, b) => a.localeCompare(b));
+        if (cachedVehicleMakes.length === 0) throw new Error('No makes returned');
+        fillMakeOptions(cachedVehicleMakes);
+      } catch (err) {
+        console.error('Could not load vehicle makes:', err);
+        cachedVehicleMakes = null;
+        resetVehicleSelect(makeSelect, 'Make');
+        setVehicleStatus("Couldn't load vehicle makes right now — you can skip this and still submit your request.", true);
+      }
+    }
+
+    async function loadVehicleModels() {
+      const year = document.getElementById('vehicle-year').value;
+      const make = document.getElementById('vehicle-make').value;
+      const modelSelect = document.getElementById('vehicle-model');
+
+      if (!year || !make) {
+        resetVehicleSelect(modelSelect, 'Model');
+        return;
+      }
+
+      resetVehicleSelect(modelSelect, 'Loading models…');
+      setVehicleStatus('', false);
+
+      try {
+        const response = await vpicFetch(
+          `/GetModelsForMakeYear/make/${encodeURIComponent(make)}/modelyear/${encodeURIComponent(year)}?format=json`
+        );
+        if (!response.ok) throw new Error(`NHTSA request failed (${response.status})`);
+        const data = await response.json();
+        const models = (data.Results || []).map(r => r.Model_Name).filter(Boolean);
+        const unique = Array.from(new Set(models)).sort((a, b) => a.localeCompare(b));
+
+        resetVehicleSelect(modelSelect, 'Model');
+        modelSelect.disabled = false;
+        if (unique.length === 0) {
+          setVehicleStatus(`No listed models for ${year} ${make} — you can skip this and still submit your request.`, false);
+          return;
+        }
+        for (const name of unique) {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          modelSelect.appendChild(opt);
+        }
+      } catch (err) {
+        console.error('Could not load vehicle models:', err);
+        resetVehicleSelect(modelSelect, 'Model');
+        setVehicleStatus("Couldn't load models right now — you can skip this and still submit your request.", true);
+      }
+    }
+
+    document.getElementById('vehicle-year').addEventListener('change', async () => {
+      const year = document.getElementById('vehicle-year').value;
+      const makeSelect = document.getElementById('vehicle-make');
+      const modelSelect = document.getElementById('vehicle-model');
+
+      if (!year) {
+        resetVehicleSelect(makeSelect, 'Make');
+        resetVehicleSelect(modelSelect, 'Model');
+        setVehicleStatus('', false);
+        return;
+      }
+
+      if (!cachedVehicleMakes) {
+        await loadVehicleMakes();
+      }
+      // Year changed -- whatever model was picked for the old year no
+      // longer applies, but the make list/selection itself doesn't
+      // depend on year (see note above) so it's left alone.
+      if (makeSelect.value) {
+        loadVehicleModels();
+      } else {
+        resetVehicleSelect(modelSelect, 'Model');
+      }
+    });
+
+    document.getElementById('vehicle-make').addEventListener('change', loadVehicleModels);
+
+    function resetVehicleInfoForm() {
+      const yearSelect = document.getElementById('vehicle-year');
+      yearSelect.value = '';
+      resetVehicleSelect(document.getElementById('vehicle-make'), 'Make');
+      resetVehicleSelect(document.getElementById('vehicle-model'), 'Model');
+      setVehicleStatus('', false);
+    }
 
     const screens = {
       services: document.getElementById('screen-services'),
@@ -1224,6 +1451,10 @@
         });
         if (custError) throw custError;
 
+        const vehicleYearValue = document.getElementById('vehicle-year').value;
+        const vehicleMakeValue = document.getElementById('vehicle-make').value;
+        const vehicleModelValue = document.getElementById('vehicle-model').value;
+
         const { error: jobError } = await supabaseClient.from('jobs').insert({
           id: jobId,
           customer_id: customerId,
@@ -1236,7 +1467,10 @@
           eta_minutes: currentEtaMinutes,
           distance_miles: currentDistanceMiles,
           price: currentPrice,
-          technician_id: technician ? technician.id : null
+          technician_id: technician ? technician.id : null,
+          vehicle_year: vehicleYearValue ? parseInt(vehicleYearValue, 10) : null,
+          vehicle_make: vehicleMakeValue || null,
+          vehicle_model: vehicleModelValue || null
         });
         if (jobError) throw jobError;
 
@@ -1278,6 +1512,7 @@
       document.getElementById('tire-count-row').style.display = 'none';
       document.getElementById('tire-count').value = '1';
       document.getElementById('dispatch-form').style.display = 'none';
+      resetVehicleInfoForm();
       document.getElementById('customer-name').value = '';
       document.getElementById('customer-phone').value = '';
       document.getElementById('dispatch-status').style.display = 'none';

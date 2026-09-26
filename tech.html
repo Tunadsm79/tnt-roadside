@@ -348,6 +348,7 @@
             <div class="job-service" id="job-service"></div>
             <div class="job-price" id="job-price"></div>
             <div class="job-meta" id="job-meta"></div>
+            <div class="job-meta hidden" id="job-vehicle"></div>
             <div class="job-meta" id="job-customer"></div>
             <div class="job-address" id="job-address"></div>
             <a href="#" target="_blank" rel="noopener" class="job-directions hidden" id="job-directions">Get Directions</a>
@@ -468,6 +469,7 @@
     const jobService = document.getElementById('job-service');
     const jobPrice = document.getElementById('job-price');
     const jobMeta = document.getElementById('job-meta');
+    const jobVehicle = document.getElementById('job-vehicle');
     const jobCustomer = document.getElementById('job-customer');
     const jobAddress = document.getElementById('job-address');
     const jobDirections = document.getElementById('job-directions');
@@ -822,6 +824,17 @@
       jobService.textContent = SERVICE_LABELS[job.service_type] || job.service_type;
       jobPrice.textContent = formatPrice(job);
       jobMeta.textContent = 'Dispatched ' + new Date(job.created_at).toLocaleTimeString();
+
+      // Vehicle info is optional -- the customer may have skipped it (e.g.
+      // NHTSA's API was down, or they just didn't pick one). Only show
+      // the line at all if we have at least one of the three values.
+      if (job.vehicle_year || job.vehicle_make || job.vehicle_model) {
+        const vehicleParts = [job.vehicle_year, job.vehicle_make, job.vehicle_model].filter(Boolean);
+        jobVehicle.textContent = 'Vehicle: ' + vehicleParts.join(' ');
+        jobVehicle.classList.remove('hidden');
+      } else {
+        jobVehicle.classList.add('hidden');
+      }
 
       // Who to actually call once you're there (or if the address is
       // unclear) -- pulled server-side, see refreshJobs()/customerOf().

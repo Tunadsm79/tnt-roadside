@@ -112,3 +112,18 @@ create view technician_locations as
 
 grant select on active_jobs_view to anon;
 grant select on technician_locations to anon;
+
+-- 2026-09-26: Vehicle Information (Year/Make/Model) feature. Adds three
+-- nullable columns to the existing `jobs` table -- run once, by hand, in
+-- the Supabase SQL Editor (Claude doesn't execute schema-modifying SQL
+-- directly, per this project's standing rule). No new RLS policy or
+-- GRANT is needed: `anon` already has a blanket INSERT policy + GRANT on
+-- `jobs` (see "anon can insert jobs" above), which covers any column on
+-- the table, and the service-role key already has ALL PRIVILEGES on
+-- every table in the public schema (see the service_role GRANT fix
+-- documented in the project reference doc). Values are optional/nullable
+-- on purpose -- the customer can submit a request without picking a
+-- vehicle if the NHTSA vPIC API is slow or down.
+alter table jobs add column if not exists vehicle_year integer;
+alter table jobs add column if not exists vehicle_make text;
+alter table jobs add column if not exists vehicle_model text;

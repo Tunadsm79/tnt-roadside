@@ -37,7 +37,7 @@ module.exports = async (req, res) => {
 
     const url = `${SUPABASE_URL}/rest/v1/jobs` +
       `?status=in.(requested,dispatched,en_route,arrived)` +
-      `&select=id,service_type,price,status,payment_status,created_at,customer_lat,customer_lng,customer_address,customers(name,phone)` +
+      `&select=id,service_type,price,status,payment_status,created_at,customer_lat,customer_lng,customer_address,vehicle_year,vehicle_make,vehicle_model,customers(name,phone)` +
       `&order=created_at.asc`;
 
     const response = await fetch(url, {
