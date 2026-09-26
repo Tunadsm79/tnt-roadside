@@ -1558,8 +1558,9 @@
     // ---- Message-your-technician chat (added 2026-09-26) ----
     // Deliberately the simple version: an in-app text box, no Twilio/SMS
     // involved (Twilio isn't even set up yet -- see project docs). Reads
-    // and writes both go through api/job-messages.js and
-    // api/send-message.js, never a direct Supabase call from the browser
+    // and writes both go through api/messages.js (GET to list, POST to
+    // send -- merged into one file 2026-09-26 to stay under Vercel's
+    // serverless-function cap), never a direct Supabase call from the browser
     // -- the `messages` table has RLS on with no anon policies at all, on
     // purpose, same as `customers`/`payments`.
     let seenMessageIds = new Set();
@@ -1586,7 +1587,7 @@
     async function fetchMessages(jobId) {
       if (!jobId) return;
       try {
-        const response = await fetch(`/api/job-messages?job_id=${jobId}`);
+        const response = await fetch(`/api/messages?job_id=${jobId}`);
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
         renderMessages(result.messages || []);
@@ -1626,7 +1627,7 @@
       input.value = '';
       input.disabled = true;
       try {
-        const response = await fetch('/api/send-message', {
+        const response = await fetch('/api/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ job_id: currentJobId, sender: 'customer', body: text })
