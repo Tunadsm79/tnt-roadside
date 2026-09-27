@@ -17,7 +17,7 @@
 // row to work correctly.
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const { signToken, verifyPin, logTokenCheck } = require('./_auth');
+const { signToken, verifyPin, requireRole } = require('./_auth');
 
 // Step 2 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
 // the technician roster and where each one's PIN hash lives. Two technicians
@@ -87,13 +87,17 @@ module.exports = async (req, res) => {
       return;
     }
 
-    // Step 4 of the security plan: log-only, never changes the response.
-    // Deliberately placed after the login branch above (a login call is
-    // the request establishing the token in the first place -- there's
-    // nothing to check yet on that one) and before the real heartbeat
-    // logic below, so it only evaluates on the actual duty/GPS-update
-    // calls this token would eventually need to be presented on.
-    logTokenCheck('tech-heartbeat', req);
+    // Step 7 of the security plan: REAL enforcement (Step 7 of the
+    // session's rollout). Deliberately placed after the login branch
+    // above -- and its own early `return` -- so a PIN-login call, which
+    // by definition has no token yet, is completely unaffected: this
+    // line is only ever reached by an actual duty/GPS-update call, which
+    // tech.html and admin.html both already attach a real token to (see
+    // setDutyStatus()/pushLocation() in tech.html, the On Duty override
+    // in admin.html). Same authorization model as complete-job.js and
+    // cancel-job.js: any valid tech or admin token, no ownership check.
+    const auth = requireRole('tech-heartbeat', req, res, ['tech', 'admin']);
+    if (!auth) return;
 
     if (!SERVICE_KEY) {
       res.status(500).json({ error: 'Server is not configured (missing SUPABASE_SERVICE_ROLE_KEY)' });
