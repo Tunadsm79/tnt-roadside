@@ -1,5 +1,6 @@
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const { signToken } = require('./_auth');
 
 // Creates a Stripe PaymentIntent in manual-capture mode -- this places an
 // authorization hold on the customer's card without charging it. The hold
@@ -38,9 +39,28 @@ module.exports = async (req, res) => {
       }
     });
 
+    // Step 2 addition (see claude/TNT-Roadside-Security-Architecture-Plan.md):
+    // mint the customer's job-access token here, since this is the one
+    // server round trip that already happens with job_id in hand before
+    // the jobs row exists. Wrapped in its own try/catch so a token-minting
+    // problem (e.g. TNT_AUTH_SECRET briefly unset) never breaks the actual
+    // payment authorization -- jobToken just comes back null and the
+    // existing flow proceeds exactly as it does today. index.html doesn't
+    // read this field yet, so adding it changes nothing about current
+    // behavior.
+    let jobToken = null;
+    if (job_id) {
+      try {
+        jobToken = signToken({ job_id });
+      } catch (tokenErr) {
+        console.error('create-payment-intent token-mint error:', tokenErr);
+      }
+    }
+
     res.status(200).json({
       clientSecret: paymentIntent.client_secret,
-      paymentIntentId: paymentIntent.id
+      paymentIntentId: paymentIntent.id,
+      jobToken
     });
   } catch (err) {
     console.error('create-payment-intent error:', err);

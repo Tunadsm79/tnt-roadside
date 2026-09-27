@@ -20,16 +20,40 @@
 // changes needed.
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const { signToken, verifyPin } = require('./_auth');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
   }
+
+  // Step 2 addition (see claude/TNT-Roadside-Security-Architecture-Plan.md):
+  // admin login. admin.html never POSTs here today -- it only GETs job
+  // lists -- so this branch is unreachable by anything currently deployed
+  // and changes no existing behavior. Folded into this file rather than a
+  // new one to stay under Vercel's 12-function cap, same reasoning as the
+  // file's own header comment about the 2026-09-26 merge.
+  if (req.method === 'POST') {
+    try {
+      const { pin } = req.body || {};
+      if (!verifyPin(pin, process.env.ADMIN_PIN_HASH)) {
+        res.status(401).json({ error: 'Invalid PIN' });
+        return;
+      }
+      const token = signToken({ role: 'admin' });
+      res.status(200).json({ token });
+    } catch (err) {
+      console.error('all-jobs admin-login error:', err);
+      res.status(500).json({ error: 'Could not log in' });
+    }
+    return;
+  }
+
   if (req.method !== 'GET') {
     res.status(405).json({ error: 'Method not allowed' });
     return;

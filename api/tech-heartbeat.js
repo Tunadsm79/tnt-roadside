@@ -17,6 +17,16 @@
 // row to work correctly.
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const { signToken, verifyPin } = require('./_auth');
+
+// Step 2 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
+// the technician roster and where each one's PIN hash lives. Two technicians
+// today -- add a line here (and the matching TECH_PIN_HASH_<NAME> env var in
+// Vercel) if a third one ever joins.
+const TECH_PIN_HASHES = {
+  Demian: process.env.TECH_PIN_HASH_DEMIAN,
+  Jonathan: process.env.TECH_PIN_HASH_JONATHAN
+};
 
 async function supabaseRequest(path, options = {}) {
   const response = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
@@ -52,6 +62,31 @@ module.exports = async (req, res) => {
   }
 
   try {
+    // Step 2 addition: a login call. Distinguished from every existing
+    // heartbeat/on-duty/GPS call by carrying a `pin` field instead of a
+    // `tech_name` -- today's tech.html never sends `pin`, so this branch
+    // is unreachable by anything currently deployed and changes no
+    // existing behavior. It exists so a later step (plan step 5) can
+    // switch tech.html to send the PIN here instead of resolving the
+    // technician's name from the client-side TECH_PINS table.
+    if (req.body && req.body.pin) {
+      const { pin } = req.body;
+      let matchedName = null;
+      for (const [name, hash] of Object.entries(TECH_PIN_HASHES)) {
+        if (verifyPin(pin, hash)) {
+          matchedName = name;
+          break;
+        }
+      }
+      if (!matchedName) {
+        res.status(401).json({ error: 'Invalid PIN' });
+        return;
+      }
+      const token = signToken({ role: 'tech', tech_name: matchedName });
+      res.status(200).json({ token, tech_name: matchedName });
+      return;
+    }
+
     if (!SERVICE_KEY) {
       res.status(500).json({ error: 'Server is not configured (missing SUPABASE_SERVICE_ROLE_KEY)' });
       return;
