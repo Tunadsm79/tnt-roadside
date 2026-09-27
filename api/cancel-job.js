@@ -7,7 +7,7 @@
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { notifyStatusChange } = require('./_notify');
-const { logTokenCheck } = require('./_auth');
+const { requireRole } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -45,8 +45,17 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  logTokenCheck('cancel-job', req);
+  // Step 7 of the security plan: REAL enforcement (Step 6 of the session's
+  // rollout). This is the second endpoint flipped, right after
+  // complete-job.js -- it releases a real Stripe hold, so it's the next
+  // highest-risk action. Same authorization model as complete-job.js: any
+  // valid tech or admin token is accepted, matching the app's existing
+  // shared-job-pool design (any on-duty tech, or admin as an override,
+  // can already act on any job today -- see accept-job.js's comments).
+  // Restricting a tech to only their own assigned jobs would be a new
+  // operational rule, not a security fix, and isn't part of this step.
+  const auth = requireRole('cancel-job', req, res, ['tech', 'admin']);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {
