@@ -470,6 +470,30 @@
     let selectedTechName = null; // which tech's detail panel is open, if any
     const TECH_POLL_MS = 15000;
 
+    // Step 3 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
+    // same pattern as tech.html's matching function -- ask the server for
+    // a signed admin token using the PIN just typed in, and store it
+    // alongside the existing sessionStorage flag. Nothing checks this
+    // token yet, so it's purely additive: a failed request never blocks
+    // login, which still runs on the unchanged client-side ADMIN_PIN
+    // check above.
+    async function fetchAndStoreAdminToken(pin) {
+      try {
+        const response = await fetch('/api/all-jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin })
+        });
+        if (!response.ok) return;
+        const result = await response.json();
+        if (result.token) {
+          sessionStorage.setItem('tnt-admin-token', result.token);
+        }
+      } catch (err) {
+        console.warn('Could not fetch admin session token (non-blocking):', err.message);
+      }
+    }
+
     function unlock() {
       if (pinInput.value === ADMIN_PIN) {
         sessionStorage.setItem('tnt-admin-unlocked', '1');
@@ -477,6 +501,7 @@
         dashboardScreen.classList.remove('hidden');
         refreshAll();
         startTechPolling();
+        fetchAndStoreAdminToken(pinInput.value);
       } else {
         pinStatus.textContent = 'Wrong PIN.';
         pinInput.value = '';
@@ -494,6 +519,7 @@
 
     logoutBtn.addEventListener('click', () => {
       sessionStorage.removeItem('tnt-admin-unlocked');
+      sessionStorage.removeItem('tnt-admin-token');
       allJobs = [];
       selectedJobId = null;
       pinInput.value = '';

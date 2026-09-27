@@ -619,6 +619,30 @@
       }
     }
 
+    // Step 3 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
+    // ask the server for a signed session token using the same PIN just
+    // typed in, and store it alongside the existing sessionStorage flags
+    // above. Nothing checks this token yet -- no endpoint requires it --
+    // so this is entirely additive: if the request fails for any reason
+    // (offline, a hiccup, etc.), login still proceeds exactly as it
+    // always has, using the unchanged client-side PIN table above.
+    async function fetchAndStoreTechToken(pin) {
+      try {
+        const response = await fetch('/api/tech-heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin })
+        });
+        if (!response.ok) return;
+        const result = await response.json();
+        if (result.token) {
+          sessionStorage.setItem('tnt-tech-token', result.token);
+        }
+      } catch (err) {
+        console.warn('Could not fetch tech session token (non-blocking):', err.message);
+      }
+    }
+
     function unlock() {
       const techName = TECH_PINS[pinInput.value];
       if (techName) {
@@ -631,6 +655,7 @@
         setDutyStatus(true);
         startJobPolling();
         startContinuousTracking();
+        fetchAndStoreTechToken(pinInput.value);
       } else {
         pinStatus.textContent = 'Wrong PIN.';
         pinInput.value = '';
@@ -1333,6 +1358,7 @@
       setDutyStatus(false);
       sessionStorage.removeItem('tnt-tech-unlocked');
       sessionStorage.removeItem('tnt-tech-name');
+      sessionStorage.removeItem('tnt-tech-token');
       currentTechName = null;
 
       if (pollIntervalId !== null) {
