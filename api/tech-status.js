@@ -15,7 +15,7 @@
 // dispatch-routing decision) -- this returns the most recently accepted
 // one plus a count of any others, rather than guessing which "the" job
 // is.
-const { logTokenCheck } = require('./_auth');
+const { requireRole } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -34,8 +34,11 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  logTokenCheck('tech-status', req);
+  // Step 8 of the security plan: REAL enforcement (Step 8 of the session's
+  // rollout). Only ever called by admin.html, which already sends a real
+  // token on this call. No customer-facing caller exists for this endpoint.
+  const auth = requireRole('tech-status', req, res, ['tech', 'admin']);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {

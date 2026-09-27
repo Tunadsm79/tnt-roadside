@@ -12,7 +12,7 @@
 // which is the one hard line the rest of this app's security has been
 // built around (see project docs, RLS + GRANT section). Worth a proper
 // auth pass later if this app grows past one technician.
-const { logTokenCheck } = require('./_auth');
+const { requireRole } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -31,8 +31,12 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  logTokenCheck('active-jobs', req);
+  // Step 8 of the security plan: REAL enforcement (Step 8 of the session's
+  // rollout). Only ever called by tech.html, which already sends a real
+  // token on this call (see the security plan's Step 8 write-up for the
+  // caller audit). No customer-facing caller exists for this endpoint.
+  const auth = requireRole('active-jobs', req, res, ['tech', 'admin']);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {

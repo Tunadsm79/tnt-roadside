@@ -20,7 +20,7 @@
 // changes needed.
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const { signToken, verifyPin, logTokenCheck } = require('./_auth');
+const { signToken, verifyPin, requireRole } = require('./_auth');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -59,11 +59,15 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  // Only reached for the GET path above (job lists) -- the POST/login
-  // branch already returned above, since a login call is what
-  // establishes the token in the first place.
-  logTokenCheck('all-jobs (GET)', req);
+  // Step 8 of the security plan: REAL enforcement (Step 8 of the session's
+  // rollout). Only reached for the GET path above (job lists) -- the
+  // POST/login branch already returned above, since a login call is what
+  // establishes the token in the first place and by definition has none
+  // yet. Only ever called (GET) by tech.html and admin.html, both of
+  // which already send a real token on this call. No customer-facing
+  // caller exists for this endpoint.
+  const auth = requireRole('all-jobs (GET)', req, res, ['tech', 'admin']);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {
