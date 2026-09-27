@@ -498,6 +498,17 @@
       }
     }
 
+    // Step 4 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
+    // same helper as tech.html's matching function -- attach the stored
+    // admin token as a standard Authorization: Bearer header on every
+    // API call below. The server only LOGS what it finds right now
+    // (see api/_auth.js's logTokenCheck), nothing rejects a request
+    // yet, so this changes nothing about whether these calls succeed.
+    function authHeaders() {
+      const token = sessionStorage.getItem('tnt-admin-token');
+      return token ? { Authorization: 'Bearer ' + token } : {};
+    }
+
     function unlock() {
       if (pinInput.value === ADMIN_PIN) {
         sessionStorage.setItem('tnt-admin-unlocked', '1');
@@ -568,7 +579,7 @@
 
     async function loadTechStatus() {
       try {
-        const response = await fetch('/api/tech-status');
+        const response = await fetch('/api/tech-status', { headers: authHeaders() });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
         renderTechs(result.technicians || []);
@@ -686,7 +697,7 @@
       try {
         const response = await fetch('/api/tech-heartbeat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ tech_name: tech.name, on_duty: nextState })
         });
         const result = await response.json();
@@ -803,7 +814,7 @@
 
     async function loadJobMessages(jobId) {
       try {
-        const response = await fetch('/api/messages?job_id=' + encodeURIComponent(jobId));
+        const response = await fetch('/api/messages?job_id=' + encodeURIComponent(jobId), { headers: authHeaders() });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
         renderJobMessages(result.messages || []);
@@ -898,7 +909,7 @@
           try {
             const response = await fetch('/api/cancel-job', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
               body: JSON.stringify({ job_id: job.id })
             });
             const result = await response.json();
@@ -927,7 +938,7 @@
           try {
             const response = await fetch('/api/accept-job', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
               body: JSON.stringify({ job_id: job.id, tech_name: techName, admin_reassign: true })
             });
             const result = await response.json();
@@ -961,7 +972,7 @@
       dashboardStatus.classList.add('hidden');
       summaryStrip.textContent = 'Loading…';
       try {
-        const response = await fetch('/api/all-jobs');
+        const response = await fetch('/api/all-jobs', { headers: authHeaders() });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
         allJobs = result.jobs || [];

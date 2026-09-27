@@ -36,6 +36,7 @@
 // (en_route/arrived) -- the newly-assigned tech hasn't actually done any
 // of that yet, so it would be a lie to leave the old status standing.
 const { notifyStatusChange } = require('./_notify');
+const { logTokenCheck } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -62,7 +63,7 @@ async function supabaseRequest(path, options = {}) {
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -72,6 +73,12 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  // Step 4 of the security plan: log-only. Checks whatever token (if any)
+  // came with this request and writes one line to the function log --
+  // never changes the response either way. See _auth.js's comment on
+  // logTokenCheck for why.
+  logTokenCheck('accept-job', req);
 
   try {
     if (!SERVICE_KEY) {

@@ -15,6 +15,8 @@
 //
 // Same service-role-key pattern as tech-status.js -- keeps `technicians`
 // off the public anon key's read surface.
+const { logTokenCheck } = require('./_auth');
+
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -41,6 +43,7 @@ const FALLBACK_SERVICE_MINUTES = 15; // any future/unrecognized service_type
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -50,6 +53,14 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  // Step 4 of the security plan: log-only, never changes the response.
+  // Flagged in the plan doc: this endpoint is also called by index.html
+  // (unauthenticated customers, for dispatch routing) -- so unlike the
+  // other bulk-data endpoints, it can't simply require a tech/admin
+  // token later without breaking customer dispatch. Logging here now so
+  // that's visible before step 7 has to make a real decision about it.
+  logTokenCheck('available-technicians', req);
 
   try {
     if (!SERVICE_KEY) {

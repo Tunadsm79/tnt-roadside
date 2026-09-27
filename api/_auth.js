@@ -134,9 +134,60 @@ function verifyPin(submittedPin, storedHash) {
   return timingSafeStringsEqual(computed, storedHash);
 }
 
+/**
+ * Step 4 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
+ * LOG-ONLY token check, shared by every endpoint that will eventually
+ * require a token. Reads an `Authorization: Bearer <token>` header if
+ * present, verifies it, and writes one line to the function's console
+ * log describing what it found -- absent, invalid/expired, or valid
+ * (with its role and, for a tech token, which technician). It never
+ * changes the response in any way: no matter what this finds, the
+ * caller's existing logic runs exactly as it did before this call was
+ * added. The point is purely to see, in real Vercel logs against real
+ * usage, whether each endpoint would already have a usable token by
+ * the time enforcement (plan step 7) is turned on for real -- so a
+ * mismatch like the admin-PIN one from Step 3 shows up here first,
+ * not as a locked-out technician after enforcement flips on.
+ *
+ * Returns the decoded claims (or null) in case a future step wants
+ * them, but no endpoint should act on that return value yet -- this
+ * step is deliberately observe-only.
+ */
+function logTokenCheck(endpointLabel, req) {
+  try {
+    const header = req.headers && req.headers.authorization;
+    const token = header && header.indexOf('Bearer ') === 0 ? header.slice(7) : null;
+
+    if (!token) {
+      console.log(`[auth-log-only] ${endpointLabel}: no token present`);
+      return null;
+    }
+
+    const claims = verifyToken(token);
+    if (!claims) {
+      console.log(`[auth-log-only] ${endpointLabel}: token present but INVALID or expired`);
+      return null;
+    }
+
+    const who = claims.role === 'tech'
+      ? `tech (${claims.tech_name})`
+      : claims.role === 'admin'
+        ? 'admin'
+        : claims.job_id
+          ? `customer (job_id ${claims.job_id})`
+          : 'unknown claim shape';
+    console.log(`[auth-log-only] ${endpointLabel}: valid token -- ${who}`);
+    return claims;
+  } catch (err) {
+    console.log(`[auth-log-only] ${endpointLabel}: error while checking token, treated as absent (non-blocking): ${err.message}`);
+    return null;
+  }
+}
+
 module.exports = {
   signToken,
   verifyToken,
   hashPin,
   verifyPin,
+  logTokenCheck,
 };

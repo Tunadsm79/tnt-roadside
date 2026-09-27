@@ -17,7 +17,7 @@
 // row to work correctly.
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const { signToken, verifyPin } = require('./_auth');
+const { signToken, verifyPin, logTokenCheck } = require('./_auth');
 
 // Step 2 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
 // the technician roster and where each one's PIN hash lives. Two technicians
@@ -50,7 +50,7 @@ async function supabaseRequest(path, options = {}) {
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -86,6 +86,14 @@ module.exports = async (req, res) => {
       res.status(200).json({ token, tech_name: matchedName });
       return;
     }
+
+    // Step 4 of the security plan: log-only, never changes the response.
+    // Deliberately placed after the login branch above (a login call is
+    // the request establishing the token in the first place -- there's
+    // nothing to check yet on that one) and before the real heartbeat
+    // logic below, so it only evaluates on the actual duty/GPS-update
+    // calls this token would eventually need to be presented on.
+    logTokenCheck('tech-heartbeat', req);
 
     if (!SERVICE_KEY) {
       res.status(500).json({ error: 'Server is not configured (missing SUPABASE_SERVICE_ROLE_KEY)' });

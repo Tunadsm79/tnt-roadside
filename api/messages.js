@@ -17,6 +17,8 @@
 // guessable) -- same security bar as the rest of this app (see project
 // docs), not meant to survive a determined attacker, just keep casual
 // snooping out.
+const { logTokenCheck } = require('./_auth');
+
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -92,7 +94,7 @@ async function handlePost(req, res) {
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -102,6 +104,15 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  // Step 4 of the security plan: log-only, never changes the response.
+  // A customer's calls here still won't carry any token at all -- the
+  // customer job token exists (minted in create-payment-intent.js since
+  // Step 2) but index.html was never wired up to store or send it (that
+  // remains a separate, not-yet-done item -- see "WHAT MUST CHANGE" in
+  // the plan doc). So logs from this endpoint will show a real token on
+  // tech/admin calls and "no token" on customer calls until that's done.
+  logTokenCheck('messages', req);
 
   try {
     if (!SERVICE_KEY) {

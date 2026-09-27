@@ -12,13 +12,15 @@
 // which is the one hard line the rest of this app's security has been
 // built around (see project docs, RLS + GRANT section). Worth a proper
 // auth pass later if this app grows past one technician.
+const { logTokenCheck } = require('./_auth');
+
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -28,6 +30,9 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  // Step 4 of the security plan: log-only, never changes the response.
+  logTokenCheck('active-jobs', req);
 
   try {
     if (!SERVICE_KEY) {

@@ -20,12 +20,12 @@
 // changes needed.
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const { signToken, verifyPin } = require('./_auth');
+const { signToken, verifyPin, logTokenCheck } = require('./_auth');
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -58,6 +58,12 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  // Step 4 of the security plan: log-only, never changes the response.
+  // Only reached for the GET path above (job lists) -- the POST/login
+  // branch already returned above, since a login call is what
+  // establishes the token in the first place.
+  logTokenCheck('all-jobs (GET)', req);
 
   try {
     if (!SERVICE_KEY) {

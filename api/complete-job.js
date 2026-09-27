@@ -18,6 +18,7 @@
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { notifyStatusChange } = require('./_notify');
+const { logTokenCheck } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -44,7 +45,7 @@ async function supabaseRequest(path, options = {}) {
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -54,6 +55,13 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  // Step 4 of the security plan: log-only, never changes the response.
+  // This is the highest-priority endpoint to watch here -- it's the one
+  // that captures real money, and plan step 7 will enforce a token here
+  // first, once these logs confirm a valid tech/admin token actually
+  // arrives on real completion calls.
+  logTokenCheck('complete-job', req);
 
   try {
     if (!SERVICE_KEY) {

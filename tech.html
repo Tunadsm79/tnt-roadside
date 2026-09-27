@@ -598,6 +598,20 @@
     // of both hitting whichever single row used to be "the" technician.
     let currentTechName = null;
 
+    // Step 4 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
+    // attach the session token (if we have one) as a standard
+    // Authorization: Bearer header on every API call below. Every
+    // endpoint on the server side only LOGS what it finds here right
+    // now (see api/_auth.js's logTokenCheck) -- nothing rejects a
+    // request yet, so a missing or stale token changes nothing about
+    // whether these calls succeed. This just gets a real token riding
+    // along on real traffic so those logs are actually meaningful ahead
+    // of enforcement being turned on in a later step.
+    function authHeaders() {
+      const token = sessionStorage.getItem('tnt-tech-token');
+      return token ? { Authorization: 'Bearer ' + token } : {};
+    }
+
     // Tells admin.html whether this tech is currently on shift. Fired
     // immediately on login/logout (not throttled like GPS writes) --
     // being a moment late showing "on duty" is fine, being wrong for
@@ -607,7 +621,7 @@
       try {
         const response = await fetch('/api/tech-heartbeat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ tech_name: currentTechName, on_duty: onDuty })
         });
         if (!response.ok) {
@@ -685,7 +699,7 @@
       if (!currentTechName) return;
       const response = await fetch('/api/tech-heartbeat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ tech_name: currentTechName, lat: latitude, lng: longitude })
       });
       if (!response.ok) {
@@ -830,7 +844,7 @@
         // rather than a direct anon-key Supabase read -- this is what lets
         // the job list also include the customer's name/phone without
         // ever making `customers` readable by the public anon key.
-        const response = await fetch('/api/active-jobs');
+        const response = await fetch('/api/active-jobs', { headers: authHeaders() });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
 
@@ -1036,7 +1050,7 @@
     async function fetchMessages(jobId) {
       if (!jobId) return;
       try {
-        const response = await fetch(`/api/messages?job_id=${jobId}`);
+        const response = await fetch(`/api/messages?job_id=${jobId}`, { headers: authHeaders() });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
         // A poll can land after the tech has already moved on to a
@@ -1079,7 +1093,7 @@
       try {
         const response = await fetch('/api/messages', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ job_id: chatJobId, sender: 'tech', body: text })
         });
         if (!response.ok) {
@@ -1174,7 +1188,7 @@
       try {
         const response = await fetch('/api/accept-job', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ job_id: jobId, tech_name: currentTechName })
         });
         const result = await response.json();
@@ -1270,7 +1284,7 @@
         if (finalAmountCents != null) body.final_amount_cents = finalAmountCents;
         const response = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify(body)
         });
         const result = await response.json();
@@ -1307,7 +1321,7 @@
       historySummary.textContent = 'Loading…';
       historyListEl.innerHTML = '';
       try {
-        const response = await fetch('/api/all-jobs?scope=history');
+        const response = await fetch('/api/all-jobs?scope=history', { headers: authHeaders() });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
 

@@ -9,6 +9,7 @@
 // service-role-key approach as the other job-mutation endpoints -- see
 // complete-job.js's comment for why.
 const { notifyStatusChange } = require('./_notify');
+const { logTokenCheck } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -35,7 +36,7 @@ async function supabaseRequest(path, options = {}) {
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -45,6 +46,9 @@ module.exports = async (req, res) => {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  // Step 4 of the security plan: log-only, never changes the response.
+  logTokenCheck('en-route-job', req);
 
   try {
     if (!SERVICE_KEY) {
