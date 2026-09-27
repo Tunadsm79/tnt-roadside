@@ -657,7 +657,21 @@
       }
     }
 
-    function unlock() {
+    // Step 8 fix (found live, 2026-09-27): this used to fire
+    // setDutyStatus()/startJobPolling() immediately and mint the session
+    // token in the background afterward. That was fine while
+    // tech-heartbeat.js/active-jobs.js only logged token checks (Steps
+    // 4-6) -- but now that they actually require one (Steps 7-8), a fresh
+    // login was racing its own token: the on-duty POST and the first job
+    // list fetch were going out with no Authorization header yet and
+    // getting rejected (401), silently failing to set Demian/Jonathan
+    // on-duty and leaving the job list empty until the next 10s poll
+    // quietly picked up the token and self-healed. Awaiting the token
+    // fetch first closes that gap -- unlock takes one extra network
+    // round-trip (typically well under a second), but on-duty and the
+    // job list are now correct from the very first call, not just
+    // eventually.
+    async function unlock() {
       const techName = TECH_PINS[pinInput.value];
       if (techName) {
         sessionStorage.setItem('tnt-tech-unlocked', '1');
@@ -666,10 +680,10 @@
         document.getElementById('tech-name-label').textContent = 'Logged in as ' + techName;
         pinScreen.classList.add('hidden');
         locationScreen.classList.remove('hidden');
+        await fetchAndStoreTechToken(pinInput.value);
         setDutyStatus(true);
         startJobPolling();
         startContinuousTracking();
-        fetchAndStoreTechToken(pinInput.value);
       } else {
         pinStatus.textContent = 'Wrong PIN.';
         pinInput.value = '';
