@@ -184,10 +184,49 @@ function logTokenCheck(endpointLabel, req) {
   }
 }
 
+/**
+ * Step 7 of the security plan: REAL enforcement, endpoint by endpoint.
+ * Reads and verifies the bearer token the same way logTokenCheck does,
+ * but this one actually rejects the request if it's missing, invalid/
+ * expired, or the wrong role -- writes a 401 JSON response and returns
+ * null. On success, writes one confirmation log line and returns the
+ * decoded claims so the caller can use them (e.g. which technician).
+ *
+ * Caller pattern:
+ *   const auth = requireRole('complete-job', req, res, ['tech', 'admin']);
+ *   if (!auth) return;   // requireRole already sent the 401 response
+ *
+ * `allowedRoles` is an array, e.g. ['tech', 'admin'] or ['admin'] only.
+ * Logs use the `[auth-enforced]` prefix (vs. `[auth-log-only]` from
+ * logTokenCheck) so it's easy to tell in Vercel's logs which endpoints
+ * are still observe-only and which are actually rejecting requests now.
+ */
+function requireRole(endpointLabel, req, res, allowedRoles) {
+  const header = req.headers && req.headers.authorization;
+  const token = header && header.indexOf('Bearer ') === 0 ? header.slice(7) : null;
+  const claims = token ? verifyToken(token) : null;
+
+  if (!claims || !allowedRoles.includes(claims.role)) {
+    const reason = !token
+      ? 'no token'
+      : !claims
+        ? 'invalid or expired token'
+        : `role '${claims.role}' not allowed here`;
+    console.log(`[auth-enforced] ${endpointLabel}: REJECTED (401) -- ${reason}`);
+    res.status(401).json({ error: 'Please log in again -- your session token is missing, expired, or not valid for this action.' });
+    return null;
+  }
+
+  const who = claims.role === 'tech' ? `tech (${claims.tech_name})` : 'admin';
+  console.log(`[auth-enforced] ${endpointLabel}: allowed -- ${who}`);
+  return claims;
+}
+
 module.exports = {
   signToken,
   verifyToken,
   hashPin,
   verifyPin,
   logTokenCheck,
+  requireRole,
 };

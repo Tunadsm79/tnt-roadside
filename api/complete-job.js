@@ -18,7 +18,7 @@
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 const { notifyStatusChange } = require('./_notify');
-const { logTokenCheck } = require('./_auth');
+const { requireRole } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -56,12 +56,15 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  // This is the highest-priority endpoint to watch here -- it's the one
-  // that captures real money, and plan step 7 will enforce a token here
-  // first, once these logs confirm a valid tech/admin token actually
-  // arrives on real completion calls.
-  logTokenCheck('complete-job', req);
+  // Step 7 of the security plan: REAL enforcement, first endpoint. This
+  // is the money one -- it captures a real Stripe charge -- so it goes
+  // first, per the plan's own ordering. Step 4/6's log-only check on
+  // this endpoint showed valid tech/admin tokens arriving correctly on
+  // every real completion call (via tech.html's handleJobAction, which
+  // already attaches authHeaders()), so this flips from "log it" to
+  // "require it." A rejected request never reaches Stripe or Supabase.
+  const auth = requireRole('complete-job', req, res, ['tech', 'admin']);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {
