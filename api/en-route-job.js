@@ -9,7 +9,7 @@
 // service-role-key approach as the other job-mutation endpoints -- see
 // complete-job.js's comment for why.
 const { notifyStatusChange } = require('./_notify');
-const { logTokenCheck } = require('./_auth');
+const { requireRole } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -47,8 +47,12 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  logTokenCheck('en-route-job', req);
+  // Step 9 of the security plan: REAL enforcement (same pattern/rollout
+  // as Steps 5-8). Only ever called by tech.html's handleJobAction(),
+  // which already sends a real token on this call. No customer-facing
+  // caller exists for this endpoint.
+  const auth = requireRole('en-route-job', req, res, ['tech', 'admin']);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {

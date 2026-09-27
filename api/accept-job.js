@@ -36,7 +36,7 @@
 // (en_route/arrived) -- the newly-assigned tech hasn't actually done any
 // of that yet, so it would be a lie to leave the old status standing.
 const { notifyStatusChange } = require('./_notify');
-const { logTokenCheck } = require('./_auth');
+const { requireRole } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -74,11 +74,14 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only. Checks whatever token (if any)
-  // came with this request and writes one line to the function log --
-  // never changes the response either way. See _auth.js's comment on
-  // logTokenCheck for why.
-  logTokenCheck('accept-job', req);
+  // Step 9 of the security plan: REAL enforcement, same requireRole()
+  // pattern as complete-job.js/cancel-job.js/tech-heartbeat.js/
+  // active-jobs.js/all-jobs.js/tech-status.js. Only ever called by
+  // tech.html and admin.html (a normal accept, or admin.html's Reassign
+  // action via admin_reassign), both of which already send a real token
+  // on this call. No customer-facing caller exists for this endpoint.
+  const auth = requireRole('accept-job', req, res, ['tech', 'admin']);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {
