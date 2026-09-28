@@ -17,7 +17,7 @@
 // guessable) -- same security bar as the rest of this app (see project
 // docs), not meant to survive a determined attacker, just keep casual
 // snooping out.
-const { logTokenCheck } = require('./_auth');
+const { requireJobAccess } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -105,14 +105,22 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  // A customer's calls here still won't carry any token at all -- the
-  // customer job token exists (minted in create-payment-intent.js since
-  // Step 2) but index.html was never wired up to store or send it (that
-  // remains a separate, not-yet-done item -- see "WHAT MUST CHANGE" in
-  // the plan doc). So logs from this endpoint will show a real token on
-  // tech/admin calls and "no token" on customer calls until that's done.
-  logTokenCheck('messages', req);
+  // Step 10 of the security plan (last endpoint in the original plan):
+  // REAL enforcement, via requireJobAccess() instead of requireRole()
+  // like every other endpoint -- this is the one file two different
+  // kinds of caller legitimately hit. A tech/admin role token works
+  // here same as anywhere else; a customer's job token (now stored and
+  // sent by index.html as of the same change that added this check)
+  // only ever grants access to the one job_id it was minted for. The
+  // job_id itself lives in a different place depending on method (query
+  // string on GET, body on POST), so it's pulled out before the auth
+  // check runs, rather than inside handleGet/handlePost as before.
+  const jobId = req.method === 'GET'
+    ? (req.query && req.query.job_id)
+    : (req.body && req.body.job_id);
+
+  const auth = requireJobAccess('messages', req, res, jobId);
+  if (!auth) return;
 
   try {
     if (!SERVICE_KEY) {

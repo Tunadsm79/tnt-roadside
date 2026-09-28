@@ -1324,6 +1324,14 @@
     // 2026-09-26) so the live tracking screen follows the SPECIFIC tech
     // working this job, not just "whichever tech happens to be active."
     let currentTechnicianId = null;
+    // The signed job-access token minted by create-payment-intent.js at
+    // dispatch time (Step 10 of the security plan). Required on every
+    // /api/messages call from here on -- that endpoint now checks for a
+    // valid tech/admin token OR a job token matching the job_id being
+    // asked about. Nothing else on this page needs it (status polling
+    // and available-technicians stay unauthenticated by design -- see
+    // the security plan doc's "WHAT CAN STAY THE SAME" section).
+    let currentJobToken = null;
 
     // ---- Resume-active-job-on-reload (added 2026-09-26) ----
     // Everything above (currentJobId/currentTechnicianId/currentDestination)
@@ -1342,6 +1350,7 @@
           jobId: currentJobId,
           technicianId: currentTechnicianId,
           destination: currentDestination,
+          jobToken: currentJobToken,
         }));
       } catch (err) {
         // Private-browsing mode, storage disabled, quota, etc. -- not
@@ -1373,6 +1382,7 @@
       currentJobId = saved.jobId;
       currentTechnicianId = saved.technicianId;
       currentDestination = saved.destination;
+      currentJobToken = saved.jobToken || null;
 
       const status = await fetchJobStatus(currentJobId);
 
@@ -1383,6 +1393,7 @@
         currentJobId = null;
         currentTechnicianId = null;
         currentDestination = null;
+        currentJobToken = null;
         clearSavedJob();
         return;
       }
@@ -1393,6 +1404,7 @@
         currentJobId = null;
         currentTechnicianId = null;
         currentDestination = null;
+        currentJobToken = null;
         return;
       }
 
@@ -1721,7 +1733,8 @@
     async function fetchMessages(jobId) {
       if (!jobId) return;
       try {
-        const response = await fetch(`/api/messages?job_id=${jobId}`);
+        const headers = currentJobToken ? { Authorization: 'Bearer ' + currentJobToken } : {};
+        const response = await fetch(`/api/messages?job_id=${jobId}`, { headers });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
         renderMessages(result.messages || []);
@@ -1761,9 +1774,11 @@
       input.value = '';
       input.disabled = true;
       try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (currentJobToken) headers.Authorization = 'Bearer ' + currentJobToken;
         const response = await fetch('/api/messages', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ job_id: currentJobId, sender: 'customer', body: text })
         });
         if (!response.ok) {
@@ -1902,6 +1917,13 @@
           throw new Error(intentData.error || 'Could not start card authorization.');
         }
         paymentIntentId = intentData.paymentIntentId;
+        // Step 10 of the security plan: store the signed job token so
+        // this browser can prove it's the one that created this job --
+        // required by /api/messages from here on. Comes back null if
+        // job_id wasn't sent or token-minting hiccuped server-side
+        // (see create-payment-intent.js's own comment) -- chat simply
+        // won't authenticate in that rare case, nothing else breaks.
+        currentJobToken = intentData.jobToken || null;
 
         // 2. Confirm the card with Stripe.js -- this is the step that
         //    actually places the authorization hold. Card details go

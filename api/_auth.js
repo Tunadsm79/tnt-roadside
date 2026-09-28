@@ -222,6 +222,53 @@ function requireRole(endpointLabel, req, res, allowedRoles) {
   return claims;
 }
 
+/**
+ * Step 10 of the security plan: enforcement for api/messages.js, which
+ * is the one endpoint two different kinds of caller legitimately hit --
+ * a technician/admin (a normal role token, same as requireRole checks)
+ * OR a customer (a job token minted by create-payment-intent.js, which
+ * carries `job_id` but no `role`). A job token only ever grants access
+ * to the ONE job_id it was minted for -- it does not (and structurally
+ * cannot, since nothing else is in its claims) grant access to any
+ * other job's chat thread.
+ *
+ * `jobId` is whatever job_id the caller is actually asking about (the
+ * `?job_id=` query param on GET, the `job_id` body field on POST) --
+ * the caller must extract that before calling this, since messages.js
+ * accepts it from two different places depending on method.
+ *
+ * Caller pattern (mirrors requireRole's):
+ *   const auth = requireJobAccess('messages', req, res, jobId);
+ *   if (!auth) return;   // requireJobAccess already sent the 401
+ */
+function requireJobAccess(endpointLabel, req, res, jobId) {
+  const header = req.headers && req.headers.authorization;
+  const token = header && header.indexOf('Bearer ') === 0 ? header.slice(7) : null;
+  const claims = token ? verifyToken(token) : null;
+
+  const isStaff = !!claims && (claims.role === 'tech' || claims.role === 'admin');
+  const isMatchingCustomer = !!claims && !claims.role && !!claims.job_id && claims.job_id === jobId;
+
+  if (!claims || (!isStaff && !isMatchingCustomer)) {
+    const reason = !token
+      ? 'no token'
+      : !claims
+        ? 'invalid or expired token'
+        : claims.job_id
+          ? 'job token does not match this job_id'
+          : `role '${claims.role}' not allowed here`;
+    console.log(`[auth-enforced] ${endpointLabel}: REJECTED (401) -- ${reason}`);
+    res.status(401).json({ error: 'Please log in again -- your session token is missing, expired, or not valid for this action.' });
+    return null;
+  }
+
+  const who = isStaff
+    ? (claims.role === 'tech' ? `tech (${claims.tech_name})` : 'admin')
+    : `customer (job_id ${claims.job_id})`;
+  console.log(`[auth-enforced] ${endpointLabel}: allowed -- ${who}`);
+  return claims;
+}
+
 module.exports = {
   signToken,
   verifyToken,
@@ -229,4 +276,5 @@ module.exports = {
   verifyPin,
   logTokenCheck,
   requireRole,
+  requireJobAccess,
 };
