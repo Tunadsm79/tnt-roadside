@@ -9,7 +9,7 @@
 // service-role-key approach as the other job-mutation endpoints -- see
 // complete-job.js's comment for why.
 const { notifyStatusChange } = require('./_notify');
-const { requireRole } = require('./_auth');
+const { requireRole, ALLOWED_ORIGIN } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -34,7 +34,7 @@ async function supabaseRequest(path, options = {}) {
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 

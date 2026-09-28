@@ -15,13 +15,13 @@
 // dispatch-routing decision) -- this returns the most recently accepted
 // one plus a count of any others, rather than guessing which "the" job
 // is.
-const { requireRole } = require('./_auth');
+const { requireRole, ALLOWED_ORIGIN } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 

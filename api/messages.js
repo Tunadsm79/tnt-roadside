@@ -17,7 +17,7 @@
 // guessable) -- same security bar as the rest of this app (see project
 // docs), not meant to survive a determined attacker, just keep casual
 // snooping out.
-const { requireJobAccess } = require('./_auth');
+const { requireJobAccess, ALLOWED_ORIGIN } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -92,7 +92,7 @@ async function handlePost(req, res) {
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 

@@ -17,7 +17,7 @@
 // row to work correctly.
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const { signToken, verifyPin, requireRole } = require('./_auth');
+const { signToken, verifyPin, requireRole, ALLOWED_ORIGIN } = require('./_auth');
 
 // Step 2 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
 // the technician roster and where each one's PIN hash lives. Two technicians
@@ -48,7 +48,7 @@ async function supabaseRequest(path, options = {}) {
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 

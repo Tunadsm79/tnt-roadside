@@ -1,13 +1,13 @@
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const { signToken } = require('./_auth');
+const { signToken, ALLOWED_ORIGIN } = require('./_auth');
 
 // Creates a Stripe PaymentIntent in manual-capture mode -- this places an
 // authorization hold on the customer's card without charging it. The hold
 // is captured later via api/complete-job.js (job completed, full or partial
 // amount) or released via api/cancel-job.js (job cancelled, full release).
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 

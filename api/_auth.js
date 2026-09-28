@@ -16,6 +16,16 @@
 
 const crypto = require('crypto');
 
+// Step 11 of the security plan (claude/TNT-Roadside-Security-Architecture-Plan.md):
+// the production origin every endpoint's CORS header is locked to, now
+// that token enforcement is fully rolled out (plan item 7, the last
+// "REQUIRED BEFORE LIVE LAUNCH" item, deliberately saved for last so it
+// wouldn't have to be loosened again mid-rollout while testing). Single
+// source of truth -- change this one value to add/swap a production
+// domain (e.g. once a custom domain replaces the Vercel one) instead of
+// editing all 12 endpoint files individually.
+const ALLOWED_ORIGIN = 'https://tnt-roadside.vercel.app';
+
 function getSigningSecret() {
   const secret = process.env.TNT_AUTH_SECRET;
   if (!secret) {
@@ -277,4 +287,5 @@ module.exports = {
   logTokenCheck,
   requireRole,
   requireJobAccess,
+  ALLOWED_ORIGIN,
 };

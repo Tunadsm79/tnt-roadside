@@ -29,7 +29,7 @@
 // caller (index.html) that will never carry a token. logTokenCheck is
 // kept purely for observability (was it ever called with staff traffic
 // by mistake), not because enforcement is coming.
-const { logTokenCheck } = require('./_auth');
+const { logTokenCheck, ALLOWED_ORIGIN } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -135,7 +135,7 @@ async function getAnonymizedRoster(res) {
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
