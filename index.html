@@ -304,6 +304,11 @@
       border: 1px solid #334155;
       color: #cbd5e1;
     }
+    .btn.danger {
+      background: transparent;
+      border: 1px solid #f87171;
+      color: #f87171;
+    }
 
     .back-link {
       color: #94a3b8;
@@ -584,6 +589,32 @@
 
       <p id="tracking-updated" style="margin-top:8px; font-size:14px; color:#94a3b8;"></p>
 
+      <!-- Customer self-service cancellation -- added 2026-09-29. Visibility
+           toggled by updateTrackingDisplay() on every poll tick, same place
+           that already sets the status line's text: allowed for
+           requested/dispatched/en_route, replaced by the arrived-notice
+           below once the tech is on site. Buttons start hidden in markup
+           so nothing flashes before the first updateTrackingDisplay() call
+           (which runs synchronously from startTracking() before any poll
+           has happened). -->
+      <button class="btn danger" id="tracking-cancel-btn" style="display:none;">Cancel Service</button>
+
+      <div id="tracking-cancel-confirm" class="chat-box" style="display:none; margin-top:16px;">
+        <p style="padding:16px 16px 0; font-size:14px; color:#cbd5e1;">
+          Cancel this service? Your card will not be charged, and the authorization hold will be released.
+        </p>
+        <div style="display:flex; gap:10px; padding:12px 16px 16px;">
+          <button class="btn danger" id="tracking-cancel-yes-btn" style="margin-top:0;">Yes, Cancel</button>
+          <button class="btn secondary" id="tracking-cancel-no-btn" style="margin-top:0;">No, Keep It</button>
+        </div>
+        <p id="tracking-cancel-status" style="display:none; padding:0 16px 16px; font-size:14px; color:#f87171;"></p>
+      </div>
+
+      <p id="tracking-arrived-cancel-notice" style="display:none; font-size:14px; color:#94a3b8; margin-top:16px;">
+        Your technician is already on site. If you need to cancel or have a problem, please
+        <a href="#chat-input" id="tracking-arrived-chat-link" style="color:#60a5fa;">message them below</a>.
+      </p>
+
       <div class="chat-box">
         <div class="chat-header">Message your technician</div>
         <!-- Moved here 2026-09-26 per Demian: the "Jonathan accepted the
@@ -630,6 +661,24 @@
       </div>
 
       <button class="btn secondary" id="completed-back-btn" style="margin-top: 20px;">Back to Services</button>
+    </div>
+  </main>
+
+  <!-- Cancellation-confirmation screen -- added 2026-09-29 (customer
+       self-service cancellation). Mirrors screen-completed's persistence
+       model (stays up across reload/poll until the customer deliberately
+       taps "Back to Services") but deliberately carries no receipt/CTA
+       content -- nothing was charged, so there's nothing to show but the
+       fact that the hold was released. Copy states the fact without
+       promising a bank-clearing timeline, per Demian. -->
+  <main class="screen" id="screen-cancelled">
+    <div class="card">
+      <h2>Service Cancelled</h2>
+      <div class="eta-box" style="display:block;">
+        Your card was not charged, and the authorization hold has been released.
+        Depending on your bank, it may take a few business days to disappear from your statement.
+      </div>
+      <button class="btn secondary" id="cancelled-back-btn" style="margin-top: 20px;">Back to Services</button>
     </div>
   </main>
 
@@ -974,6 +1023,7 @@
       confirm: document.getElementById('screen-confirm'),
       tracking: document.getElementById('screen-tracking'),
       completed: document.getElementById('screen-completed'),
+      cancelled: document.getElementById('screen-cancelled'),
     };
 
     // Human-readable labels for the completed-job screen, matching the
@@ -1541,19 +1591,24 @@
       const status = await fetchJobStatus(currentJobId);
 
       if (status === null) {
-        // Job fell out of active_jobs_view -- either it completed or it
-        // was cancelled. 2026-09-28: check which one, so a customer who
-        // reloads the page right after their job finished still sees the
-        // completed-job screen instead of silence. currentJobId is kept
-        // (not cleared) here on purpose -- showCompletedScreen and the
-        // headlight CTA both need it, and only "Back to Services" clears
-        // the saved job from here on.
-        const completedJob = await fetchJobCompletionInfo(currentJobId);
-        if (completedJob) {
-          showCompletedScreen(completedJob);
+        // Job fell out of active_jobs_view -- it completed, it was
+        // cancelled, or (rare) it genuinely can't be found. 2026-09-28/29:
+        // check which, so a customer who reloads the page right after
+        // their job finished or was cancelled still sees the matching
+        // confirmation screen instead of silence. currentJobId is kept
+        // (not cleared) for either confirmed outcome -- showCompletedScreen/
+        // showCancelledScreen (and the headlight CTA) need it, and only
+        // "Back to Services" clears the saved job from here on.
+        const info = await fetchJobCompletionInfo(currentJobId);
+        if (info.completedJob) {
+          showCompletedScreen(info.completedJob);
           return;
         }
-        // Actually cancelled, not completed -- nothing to resume.
+        if (info.cancelled) {
+          showCancelledScreen();
+          return;
+        }
+        // Genuinely not found / unknown -- nothing to resume or confirm.
         currentJobId = null;
         currentTechnicianId = null;
         currentDestination = null;
@@ -1705,15 +1760,19 @@
     // finished job gets the receipt screen instead of getting lumped in
     // with "cancelled" and silently reset.
     async function fetchJobCompletionInfo(jobId) {
-      if (!jobId) return null;
+      if (!jobId) return { completedJob: null, cancelled: false };
       try {
         const response = await fetch('/api/available-technicians?job_id=' + encodeURIComponent(jobId));
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
-        return result.completedJob || null;
+        // 2026-09-29 (customer cancellation): now also surfaces `cancelled`
+        // alongside `completedJob` -- both are ways a job can fall out of
+        // active_jobs_view, and callers need to tell them apart to show
+        // the right screen instead of the generic silent reset.
+        return { completedJob: result.completedJob || null, cancelled: !!result.cancelled };
       } catch (err) {
         console.error('Could not fetch job completion info:', err);
-        return null;
+        return { completedJob: null, cancelled: false };
       }
     }
 
@@ -1744,6 +1803,19 @@
       ctaStatus.style.color = '';
 
       showScreen('completed');
+    }
+
+    // Shows the cancellation-confirmation screen. No dynamic content to
+    // fill in (unlike showCompletedScreen) -- nothing was charged, so
+    // there's nothing job-specific to show beyond the static copy already
+    // in screen-cancelled's markup. Deliberately does NOT call
+    // clearSavedJob() or resetToServices() -- same persistence model as
+    // showCompletedScreen, so this screen survives a reload until the
+    // customer taps "Back to Services".
+    function showCancelledScreen() {
+      stopTracking();
+      currentJobStatus = 'cancelled';
+      showScreen('cancelled');
     }
 
     // ---- Dispatch-time technician revalidation (rebuilt 2026-09-28) ----
@@ -1812,6 +1884,32 @@
         nameEl.textContent = `${techLabel} has accepted your job and is getting ready to head out.`;
       }
 
+      // Customer self-service cancellation visibility -- added 2026-09-29.
+      // Runs on every call (both the initial call from startTracking() and
+      // every poll tick after), so the Cancel Service button disappears in
+      // step with the tech's real status even on a page that's been open
+      // a while, rather than only at the moment the customer happens to
+      // load the page. This is a UX/consistency measure, NOT the security
+      // boundary -- cancel-job.js re-checks the job's actual current
+      // status server-side regardless of what this stale-or-fresh client
+      // believes (see that file's 2026-09-28 header comment).
+      const cancelBtnEl = document.getElementById('tracking-cancel-btn');
+      const cancelConfirmEl = document.getElementById('tracking-cancel-confirm');
+      const arrivedNoticeEl = document.getElementById('tracking-arrived-cancel-notice');
+      if (currentJobStatus === 'arrived') {
+        cancelBtnEl.style.display = 'none';
+        cancelConfirmEl.style.display = 'none';
+        arrivedNoticeEl.style.display = 'block';
+      } else {
+        arrivedNoticeEl.style.display = 'none';
+        // Don't yank the confirm box out from under an in-progress cancel
+        // tap -- only show the plain button when the confirm box isn't
+        // already open.
+        if (cancelConfirmEl.style.display !== 'block') {
+          cancelBtnEl.style.display = 'block';
+        }
+      }
+
       if (technician.location_updated_at) {
         const updated = new Date(technician.location_updated_at);
         updatedEl.textContent = `Location last updated ${updated.toLocaleTimeString()}`;
@@ -1858,15 +1956,23 @@
         if (currentJobId) {
           const status = await fetchJobStatus(currentJobId);
           if (status === null) {
-            // Job wrapped up (completed/cancelled) server-side while this
-            // customer was watching the tracking screen. 2026-09-28:
-            // find out which one -- a completed job gets the receipt
-            // screen (and stays there until "Back to Services"), not the
-            // silent reset a cancelled job still gets.
+            // Job wrapped up server-side while this customer was watching
+            // the tracking screen. 2026-09-28/29: find out how -- a
+            // completed job gets the receipt screen, a cancelled job gets
+            // the cancellation-confirmation screen (both stay up until
+            // "Back to Services"), rather than the old silent reset. This
+            // covers a tech/admin-initiated cancel, or the customer
+            // cancelling from a second tab -- a customer's OWN cancel tap
+            // on THIS tab is handled immediately by its own click handler
+            // and never reaches this branch at all.
             stopTracking();
-            const completedJob = await fetchJobCompletionInfo(currentJobId);
-            if (completedJob) {
-              showCompletedScreen(completedJob);
+            const info = await fetchJobCompletionInfo(currentJobId);
+            if (info.completedJob) {
+              showCompletedScreen(info.completedJob);
+              return;
+            }
+            if (info.cancelled) {
+              showCancelledScreen();
               return;
             }
             clearSavedJob();
@@ -2254,6 +2360,13 @@
       baseEtaText = null;
       baseDistanceText = null;
       quotedTechnicianId = null;
+      // Reset the cancel-flow UI back to its default state so a future
+      // dispatch's tracking screen doesn't start with a stale open confirm
+      // box or hidden Cancel button from a previous job.
+      document.getElementById('tracking-cancel-btn').style.display = 'none';
+      document.getElementById('tracking-cancel-confirm').style.display = 'none';
+      document.getElementById('tracking-arrived-cancel-notice').style.display = 'none';
+      document.getElementById('tracking-cancel-status').style.display = 'none';
       clearSavedJob();
       showScreen('services');
     }
@@ -2268,6 +2381,85 @@
 
     document.getElementById('completed-back-btn').addEventListener('click', () => {
       resetToServices();
+    });
+
+    document.getElementById('cancelled-back-btn').addEventListener('click', () => {
+      resetToServices();
+    });
+
+    // ---- Customer self-service cancellation (added 2026-09-29) ----
+    // "Cancel Service" -> inline two-step confirm -> POST /api/cancel-job
+    // with the customer's job token (same Authorization: Bearer pattern
+    // sendChatMessage()/fetchMessages() already use). See cancel-job.js's
+    // header comment for the server-side half of this (requireJobAccess,
+    // the 'arrived' restriction, and why the Stripe cancellation_reason
+    // was deliberately left unchanged).
+    document.getElementById('tracking-cancel-btn').addEventListener('click', () => {
+      document.getElementById('tracking-cancel-btn').style.display = 'none';
+      const statusEl = document.getElementById('tracking-cancel-status');
+      statusEl.style.display = 'none';
+      statusEl.textContent = '';
+      const yesBtn = document.getElementById('tracking-cancel-yes-btn');
+      const noBtn = document.getElementById('tracking-cancel-no-btn');
+      yesBtn.disabled = false;
+      noBtn.disabled = false;
+      yesBtn.textContent = 'Yes, Cancel';
+      document.getElementById('tracking-cancel-confirm').style.display = 'block';
+    });
+
+    document.getElementById('tracking-cancel-no-btn').addEventListener('click', () => {
+      document.getElementById('tracking-cancel-confirm').style.display = 'none';
+      // Only bring the plain button back if the job hasn't moved to
+      // 'arrived' in the meantime (rare, but possible if the tech arrived
+      // during the few seconds this confirm box was open) -- mirrors the
+      // same check updateTrackingDisplay() does on every poll tick.
+      if (currentJobStatus !== 'arrived') {
+        document.getElementById('tracking-cancel-btn').style.display = 'block';
+      }
+    });
+
+    document.getElementById('tracking-cancel-yes-btn').addEventListener('click', async () => {
+      if (!currentJobId) return;
+      const yesBtn = document.getElementById('tracking-cancel-yes-btn');
+      const noBtn = document.getElementById('tracking-cancel-no-btn');
+      const statusEl = document.getElementById('tracking-cancel-status');
+      // Disables synchronously, before the network call starts -- this is
+      // the double-tap guard on the client side. cancel-job.js's own
+      // status guard (job already cancelled -> 400) is the server-side
+      // backstop for a second request that slips through anyway (a
+      // second tab, say).
+      yesBtn.disabled = true;
+      noBtn.disabled = true;
+      yesBtn.textContent = 'Cancelling…';
+      statusEl.style.display = 'none';
+
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (currentJobToken) headers.Authorization = 'Bearer ' + currentJobToken;
+        const response = await fetch('/api/cancel-job', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ job_id: currentJobId })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || 'Could not cancel your service.');
+
+        // Handled immediately here, not via the tracking poll's
+        // status === null branch -- this is what keeps the confirmation
+        // screen from ever being at the mercy of a poll cycle landing.
+        showCancelledScreen();
+      } catch (err) {
+        console.error('Cancel failed:', err);
+        // Surfaces cancel-job.js's own message verbatim -- e.g. the
+        // 'arrived' rejection ("Your technician has already arrived...")
+        // or "Job is already cancelled" for a stale double-tap. Both are
+        // already customer-appropriate text, not raw error codes.
+        statusEl.textContent = err.message;
+        statusEl.style.display = 'block';
+        yesBtn.disabled = false;
+        noBtn.disabled = false;
+        yesBtn.textContent = 'Yes, Cancel';
+      }
     });
 
     // ---- Headlight-restoration lead capture (added 2026-09-28) ----

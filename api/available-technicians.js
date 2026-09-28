@@ -79,8 +79,21 @@ async function getAssignedTechnicianForJob(jobId, res) {
   );
   const job = jobs && jobs[0];
 
-  if (!job || job.status === 'cancelled') {
+  if (!job) {
     res.status(200).json({ technician: null });
+    return;
+  }
+
+  // 2026-09-29 addition (customer cancellation): distinguish "cancelled"
+  // from "not found" the same way the block below distinguishes
+  // "completed" -- index.html's tracking poll and resumeActiveJobIfAny()
+  // both need this to show the cancellation-confirmation screen (rather
+  // than the generic silent reset) when the customer reloads right after
+  // cancelling, or after a tech/admin cancels while they're watching. No
+  // extra data needed here (unlike completedJob) -- nothing was charged,
+  // so there's no service/price to show on that screen.
+  if (job.status === 'cancelled') {
+    res.status(200).json({ technician: null, cancelled: true });
     return;
   }
 
