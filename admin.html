@@ -296,6 +296,23 @@
       margin-right: 8px;
     }
     .tech-detail button.off-duty-btn { background: #334155; color: #e2e8f0; }
+    /* Per-tech performance history (added 2026-09-28): admin-only view of
+       a technician's completed-job stats and per-ticket breakdown. Reuses
+       the .tech-detail-meta/.tech-detail-note text styles above rather
+       than inventing new type scales. */
+    .tech-perf-list {
+      max-height: 240px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      margin-top: 4px;
+      margin-bottom: 10px;
+    }
+    .tech-perf-row {
+      padding: 8px 0;
+      border-top: 1px solid #334155;
+    }
+    .tech-perf-row:first-child { border-top: none; }
     .install-banner {
       display: none;
       align-items: center;
@@ -688,12 +705,93 @@
           (tech.on_duty ? 'On duty — updated ' + relativeTime(tech.location_updated_at) : 'Off duty') +
         '</div>' +
         currentJobHtml(tech.current_job) +
+        '<div class="tech-section-title" style="margin-top:4px;">Performance</div>' +
+        techPerformanceHtml(tech) +
         '<button class="' + (tech.on_duty ? 'off-duty-btn' : '') + '" id="duty-toggle-btn">' +
           (tech.on_duty ? 'Set Off Duty' : 'Set On Duty') +
         '</button>' +
         '<span class="status error" id="duty-toggle-status" style="display:inline-block;"></span>';
 
       document.getElementById('duty-toggle-btn').addEventListener('click', () => toggleDuty(tech));
+    }
+
+    // Formats a minute count as "42 min" or "1h 15m". Returns null for
+    // anything non-finite so callers can skip the line entirely rather
+    // than print "NaN min".
+    function formatMinutes(mins) {
+      if (mins == null || !isFinite(mins)) return null;
+      if (mins < 60) return Math.round(mins) + ' min';
+      const h = Math.floor(mins / 60);
+      const m = Math.round(mins % 60);
+      return h + 'h' + (m ? ' ' + m + 'm' : '');
+    }
+
+    // Admin-only per-technician performance panel (added 2026-09-28, per
+    // Demian: revenue totals should be admin-only -- techs see their own
+    // completed-job list in tech.html without a dollar total, and this is
+    // where the full picture (sales, time on job, per-ticket detail) lives
+    // instead. Computed entirely from `allJobs` (already loaded by
+    // loadJobs() for the main dashboard) -- no extra API call, no new
+    // endpoint, so this doesn't touch Vercel's function-count cap.
+    //
+    // Honest limitation: the jobs table has accepted_at and completed_at,
+    // but no en_route_at/arrived_at (see TNT-Roadside-Current-State.md).
+    // So "time on job" below is accepted_at -> completed_at, which bundles
+    // drive time AND on-site work time together -- it is not possible to
+    // isolate actual travel time from that. The distance/ETA shown per
+    // ticket is the figure that was quoted to the customer at dispatch
+    // time (stored on the job), not a GPS-measured travel duration -- it's
+    // labeled "quoted" for that reason, not asserted as what really
+    // happened on the road.
+    function techPerformanceHtml(tech) {
+      const jobs = allJobs.filter(j => j.technician_id === tech.id && j.status === 'completed');
+      if (jobs.length === 0) {
+        return '<div class="tech-detail-note">No completed jobs yet.</div>';
+      }
+
+      const totalSales = jobs.reduce((sum, j) => sum + (Number(j.price) || 0), 0);
+      const durationsMin = jobs
+        .filter(j => j.accepted_at && j.completed_at)
+        .map(j => (new Date(j.completed_at) - new Date(j.accepted_at)) / 60000)
+        .filter(m => isFinite(m) && m >= 0);
+      const avgDuration = durationsMin.length
+        ? durationsMin.reduce((a, b) => a + b, 0) / durationsMin.length
+        : null;
+      const avgLine = formatMinutes(avgDuration);
+
+      const sorted = jobs.slice().sort((a, b) =>
+        new Date(b.completed_at || 0) - new Date(a.completed_at || 0)
+      );
+      const rows = sorted.map(j => {
+        const service = SERVICE_LABELS[j.service_type] || j.service_type;
+        const date = j.completed_at ? new Date(j.completed_at).toLocaleDateString() : 'date unknown';
+        const price = '$' + Number(j.price || 0).toFixed(2);
+        const durLabel = (j.accepted_at && j.completed_at)
+          ? formatMinutes((new Date(j.completed_at) - new Date(j.accepted_at)) / 60000)
+          : null;
+        const travelLabel = (j.distance_miles != null && j.eta_minutes != null)
+          ? Number(j.distance_miles).toFixed(1) + ' mi / ' + j.eta_minutes + ' min quoted'
+          : 'no quote recorded';
+        return (
+          '<div class="tech-perf-row">' +
+            '<div class="tech-detail-meta"><strong>' + service + '</strong> — ' + date + '</div>' +
+            '<div class="tech-detail-meta">' + price +
+              (durLabel ? ' &middot; ' + durLabel + ' on job' : '') +
+            '</div>' +
+            '<div class="tech-detail-note" style="margin-bottom:0;">' + travelLabel + '</div>' +
+          '</div>'
+        );
+      }).join('');
+
+      return (
+        '<div class="tech-detail-meta"><strong>$' + totalSales.toFixed(2) + '</strong> total sales — ' +
+          jobs.length + ' completed job' + (jobs.length === 1 ? '' : 's') +
+        '</div>' +
+        '<div class="tech-detail-note">' +
+          (avgLine ? 'Avg time on job (accept to complete): ' + avgLine : 'Avg time on job: not enough data') +
+        '</div>' +
+        '<div class="tech-perf-list">' + rows + '</div>'
+      );
     }
 
     async function toggleDuty(tech) {

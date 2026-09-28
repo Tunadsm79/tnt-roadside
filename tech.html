@@ -1340,9 +1340,10 @@
         if (!response.ok) throw new Error(result.error || 'Request failed');
 
         const completedJobs = result.jobs || [];
-        const total = completedJobs.reduce((sum, j) => sum + (Number(j.price) || 0), 0);
+        // Deliberately no running-total dollar figure here -- revenue
+        // totals are an admin-only view (see admin.html's tech performance
+        // panel). Techs see their own completed-job list without the sum.
         historySummary.innerHTML =
-          '<div class="history-total">$' + total.toFixed(2) + '</div>' +
           '<div class="job-meta">' + completedJobs.length + ' completed job' + (completedJobs.length === 1 ? '' : 's') + '</div>';
 
         if (completedJobs.length === 0) {
