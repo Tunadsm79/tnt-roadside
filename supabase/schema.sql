@@ -142,7 +142,7 @@ alter table jobs add column if not exists vehicle_model text;
 create table messages (
   id uuid primary key default gen_random_uuid(),
   job_id uuid references jobs(id) not null,
-  sender text not null,  -- 'customer' | 'tech'
+  sender text not null,  -- 'customer' | 'tech' | 'dispatch' (T&T admin, added 2026-09-28; documentation only, no CHECK constraint)
   body text not null,
   created_at timestamptz default now()
 );

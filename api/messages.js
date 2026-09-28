@@ -7,16 +7,26 @@
 // GET  /api/messages?job_id=... -> { messages: [...] }, oldest first.
 //      Polled every 15s by index.html's tracking screen and every 10s by
 //      tech.html's job detail view (same cadence each page already polls
-//      at for other things).
-// POST /api/messages { job_id, sender, body } -> writes one message.
+//      at for other things), and by admin.html's job-detail panel.
+// POST /api/messages { job_id, body } -> writes one message.
 //
 // Same service-role-key approach as every other job endpoint in this
 // project -- the `messages` table has RLS on with zero anon policies, so
 // this is the only way either side's message ever reaches the database.
-// Deliberately no auth beyond "you know the job_id" (a random UUID, not
-// guessable) -- same security bar as the rest of this app (see project
-// docs), not meant to survive a determined attacker, just keep casual
-// snooping out.
+//
+// 2026-09-28 (T&T Dispatch chat / sender-authentication fix): POST used
+// to also accept a client-supplied `sender` field, trusting it as long
+// as it was 'customer' or 'tech' -- meaning a customer's own job token
+// could POST { sender: 'tech', ... } and it would insert (and render)
+// as a technician message, and vice versa. requireJobAccess() below
+// only ever checked that the job_id belonged to the caller, never that
+// the caller WAS who `sender` claimed. Fixed by deriving `sender`
+// entirely from the verified token claims requireJobAccess() returns,
+// below -- the request body's `sender` field (if a caller still sends
+// one) is no longer read at all. This is also what makes T&T Dispatch
+// possible as a third participant: an admin-role token derives to
+// 'dispatch', which was previously not a reachable value at all (the
+// old code's allowlist was only 'customer'/'tech').
 const { requireJobAccess, ALLOWED_ORIGIN } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
@@ -51,17 +61,30 @@ async function handleGet(req, res) {
   res.status(200).json({ messages: data });
 }
 
-async function handlePost(req, res) {
-  const { job_id, sender, body } = req.body || {};
+// Derives the ONLY sender value this message can legitimately be
+// stored as, from the verified token claims -- never from anything
+// the client sent. `auth` is whatever requireJobAccess() returned:
+// { role: 'admin', ... }, { role: 'tech', tech_name, ... }, or
+// { job_id, ... } with no role at all for a customer's job token.
+// requireJobAccess() has already confirmed a customer's token's
+// job_id matches the job being posted to, so by the time this runs,
+// any of the three outcomes below is a caller who is genuinely
+// allowed to post into THIS job's conversation as THAT identity --
+// there's nothing left for the client to spoof.
+function deriveSender(auth) {
+  if (auth.role === 'admin') return 'dispatch';
+  if (auth.role === 'tech') return 'tech';
+  return 'customer';
+}
+
+async function handlePost(req, res, auth) {
+  const { job_id, body } = req.body || {};
 
   if (!job_id) {
     res.status(400).json({ error: 'Missing job_id' });
     return;
   }
-  if (sender !== 'customer' && sender !== 'tech') {
-    res.status(400).json({ error: "sender must be 'customer' or 'tech'" });
-    return;
-  }
+  const sender = deriveSender(auth);
   const trimmed = typeof body === 'string' ? body.trim() : '';
   if (!trimmed) {
     res.status(400).json({ error: 'Message is empty' });
@@ -131,7 +154,7 @@ module.exports = async (req, res) => {
     if (req.method === 'GET') {
       await handleGet(req, res);
     } else {
-      await handlePost(req, res);
+      await handlePost(req, res, auth);
     }
   } catch (err) {
     console.error('messages error:', err);

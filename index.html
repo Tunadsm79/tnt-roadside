@@ -20,6 +20,22 @@
       text-align: center;
       margin: 32px 0 40px;
     }
+    /* 2026-09-28 branding pass: the existing PWA icon artwork (two
+       mascot dogs + the T&T "T" mark, icons/icon-512.png) wasn't used
+       anywhere on the page itself -- only as the home-screen/tab icon.
+       icons/logo-mark.png is that same artwork with its flat white
+       background made transparent and cropped to content (no new
+       artwork, just prepped for on-page use against the dark theme).
+       clamp() keeps it prominent but proportionate from small phones
+       up through wide desktop windows; height is never set explicitly
+       so the browser can't stretch/distort it off its real aspect
+       ratio. */
+    header .brand-logo {
+      display: block;
+      margin: 0 auto 10px;
+      width: clamp(150px, 42vw, 260px);
+      height: auto;
+    }
     header h1 {
       font-size: 28px;
       font-weight: 800;
@@ -202,6 +218,25 @@
       border: 1px solid #334155;
       color: #f1f5f9;
       border-bottom-left-radius: 4px;
+    }
+    /* 2026-09-28: T&T Dispatch (admin) as a third chat participant.
+       Amber/gold so it's never mistaken for the technician's bubble
+       (.theirs, dark slate) or the customer's own (.mine, blue). */
+    .chat-bubble.dispatch {
+      align-self: flex-start;
+      background: rgba(245, 158, 11, 0.16);
+      border: 1px solid #f59e0b;
+      color: #fde68a;
+      border-bottom-left-radius: 4px;
+    }
+    .chat-bubble-label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #f59e0b;
+      margin-bottom: 2px;
     }
     .chat-input-row {
       display: flex;
@@ -429,6 +464,7 @@
 </head>
 <body>
   <header>
+    <img class="brand-logo" src="/icons/logo-mark.png" width="508" height="271" alt="T&amp;T Roadside" loading="eager" decoding="async">
     <h1>T&amp;T <span>Roadside</span></h1>
     <p>Mobile roadside help &mdash; Gulfport &amp; Biloxi, MS</p>
     <div class="duty-indicator" id="duty-indicator">
@@ -2053,13 +2089,21 @@
       const el = document.getElementById('chat-messages');
       if (!el) return;
 
-      const newFromTech = messages.filter(m => !seenMessageIds.has(m.id) && m.sender === 'tech');
+      // 2026-09-28: T&T Dispatch joins the conversation as a third
+      // sender -- the customer should get the same "new message" bark
+      // for a Dispatch message as for a technician one, not just tech.
+      const newFromOthers = messages.filter(m =>
+        !seenMessageIds.has(m.id) && (m.sender === 'tech' || m.sender === 'dispatch')
+      );
       messages.forEach(m => seenMessageIds.add(m.id));
 
       if (messages.length === 0) {
         el.innerHTML = '<div class="chat-empty">No messages yet — say hi if you need anything.</div>';
       } else {
         el.innerHTML = messages.map(m => {
+          if (m.sender === 'dispatch') {
+            return `<div class="chat-bubble dispatch"><span class="chat-bubble-label">T&amp;T Dispatch</span>${escapeHtml(m.body)}</div>`;
+          }
           const cls = m.sender === 'customer' ? 'mine' : 'theirs';
           return `<div class="chat-bubble ${cls}">${escapeHtml(m.body)}</div>`;
         }).join('');
@@ -2068,7 +2112,7 @@
 
       // Don't bark for messages that were already there on first load --
       // only for ones that show up *while* the customer is watching.
-      if (newFromTech.length && !firstMessageCheck) playBarkAlert();
+      if (newFromOthers.length && !firstMessageCheck) playBarkAlert();
       firstMessageCheck = false;
     }
 
@@ -2082,10 +2126,14 @@
       try {
         const headers = { 'Content-Type': 'application/json' };
         if (currentJobToken) headers.Authorization = 'Bearer ' + currentJobToken;
+        // 2026-09-28: no `sender` field here anymore -- the server now
+        // derives it from the job token itself (see api/messages.js),
+        // so sending one is at best redundant and at worst misleading
+        // about what actually controls it.
         const response = await fetch('/api/messages', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ job_id: currentJobId, sender: 'customer', body: text })
+          body: JSON.stringify({ job_id: currentJobId, body: text })
         });
         if (!response.ok) {
           const result = await response.json().catch(() => ({}));

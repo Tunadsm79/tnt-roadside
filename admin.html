@@ -26,6 +26,17 @@
       align-items: center;
       text-align: center;
     }
+    /* 2026-09-28 branding pass: same prepped icons/logo-mark.png as
+       index.html, sized down -- this is a working screen for staff,
+       not the customer's first impression, so a compact mark next to
+       the existing text wordmark is consistency without crowding the
+       PIN pad or dashboard below it. */
+    .brand-logo {
+      display: block;
+      margin: 0 auto 8px;
+      width: clamp(90px, 32vw, 130px);
+      height: auto;
+    }
     h1 { font-size: 22px; font-weight: 800; }
     h1 span { color: #E01010; }
     p.sub { color: #94a3b8; font-size: 14px; }
@@ -214,6 +225,43 @@
       background: #1e3a8a;
       color: #dbeafe;
     }
+    /* 2026-09-28: T&T Dispatch (admin's own outgoing messages) -- amber/
+       gold, right-aligned like "mine" since admin IS Dispatch here, but
+       visually distinct from both the customer (dark slate) and tech
+       (blue) bubbles above. */
+    .job-msg.dispatch {
+      align-self: flex-end;
+      background: rgba(245, 158, 11, 0.18);
+      border: 1px solid #f59e0b;
+      color: #fde68a;
+    }
+    .job-dispatch-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .job-dispatch-row input[type="text"] {
+      flex: 1;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 13px;
+    }
+    .job-dispatch-row button {
+      width: auto;
+      padding: 8px 14px;
+      font-size: 13px;
+      background: #b45309;
+    }
+    .job-dispatch-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #f59e0b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
     .job-service { font-size: 16px; font-weight: 800; }
     .job-badge {
       display: inline-block;
@@ -372,6 +420,7 @@
 </head>
 <body>
   <div class="card">
+    <img class="brand-logo" src="/icons/logo-mark.png" width="508" height="271" alt="T&amp;T Roadside" loading="eager" decoding="async">
     <h1>T&amp;T <span>Roadside</span> &mdash; Admin</h1>
 
     <div class="install-banner" id="install-banner">
@@ -942,12 +991,17 @@
         el.innerHTML = '<div class="job-detail-row">No messages yet.</div>';
         return;
       }
-      el.innerHTML = messages.map(m =>
-        '<div class="job-msg ' + (m.sender === 'tech' ? 'tech' : 'customer') + '">' +
-          '<span class="job-msg-sender">' + (m.sender === 'tech' ? 'Tech' : 'Customer') + '</span>' +
+      // 2026-09-28: T&T Dispatch joins as a third sender -- give it its
+      // own class/label instead of falling into the "customer" bucket
+      // the old two-way ternary would have put it in.
+      el.innerHTML = messages.map(m => {
+        const cls = m.sender === 'tech' ? 'tech' : m.sender === 'dispatch' ? 'dispatch' : 'customer';
+        const label = m.sender === 'tech' ? 'Tech' : m.sender === 'dispatch' ? 'T&amp;T Dispatch' : 'Customer';
+        return '<div class="job-msg ' + cls + '">' +
+          '<span class="job-msg-sender">' + label + '</span>' +
           escapeHtml(m.body) +
-        '</div>'
-      ).join('');
+        '</div>';
+      }).join('');
       el.scrollTop = el.scrollHeight;
     }
 
@@ -961,9 +1015,19 @@
       // Shown for every job regardless of status -- reviewing what was
       // actually said on a completed or cancelled job is still useful
       // (a dispute, a "why did this get cancelled" question later).
+      // 2026-09-28: T&T Dispatch send box -- lives inside the same
+      // existing conversation area (not a separate panel), works
+      // regardless of job status just like the customer/tech side of
+      // this same conversation already does (messages.js has no status
+      // gate today, and this round deliberately leaves that as-is).
       const messagesHtml =
         '<div class="job-detail-row"><strong>Messages</strong></div>' +
-        '<div class="job-messages" id="job-detail-messages"><div class="job-detail-row">Loading…</div></div>';
+        '<div class="job-messages" id="job-detail-messages"><div class="job-detail-row">Loading…</div></div>' +
+        '<div class="job-dispatch-row">' +
+          '<input type="text" id="job-detail-dispatch-input" placeholder="Message as T&amp;T Dispatch…" maxlength="500">' +
+          '<button id="job-detail-dispatch-btn">Send as T&amp;T Dispatch</button>' +
+        '</div>' +
+        '<span class="job-detail-row" id="job-detail-dispatch-status" style="display:none;"></span>';
 
       if (!ACTIVE_STATUSES.includes(job.status)) {
         return '<div class="job-detail">' + messagesHtml +
@@ -1001,6 +1065,52 @@
       // history), so this always runs, ahead of the action-button guard
       // below.
       startJobMessagesPolling(job.id);
+
+      // Dispatch send box: wired here too, ahead of the !statusEl
+      // return below, so it works on a completed/cancelled job exactly
+      // like the rest of this conversation already does -- there's no
+      // status gate on messages.js, and this round intentionally
+      // doesn't add one.
+      const dispatchInput = document.getElementById('job-detail-dispatch-input');
+      const dispatchBtn = document.getElementById('job-detail-dispatch-btn');
+      const dispatchStatusEl = document.getElementById('job-detail-dispatch-status');
+      if (dispatchBtn && dispatchInput) {
+        const sendDispatchMessage = async () => {
+          const text = dispatchInput.value.trim();
+          if (!text) return;
+          dispatchInput.value = '';
+          dispatchInput.disabled = true;
+          dispatchBtn.disabled = true;
+          if (dispatchStatusEl) dispatchStatusEl.style.display = 'none';
+          try {
+            const response = await fetch('/api/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+              body: JSON.stringify({ job_id: job.id, body: text })
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || 'Send failed');
+            await loadJobMessages(job.id);
+          } catch (err) {
+            console.error('admin dispatch send failed:', err);
+            dispatchInput.value = text; // give it back so admin doesn't lose it
+            if (dispatchStatusEl) {
+              dispatchStatusEl.textContent = 'Could not send: ' + err.message;
+              dispatchStatusEl.style.display = 'block';
+            }
+          } finally {
+            dispatchInput.disabled = false;
+            dispatchBtn.disabled = false;
+          }
+        };
+        dispatchBtn.addEventListener('click', sendDispatchMessage);
+        dispatchInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            sendDispatchMessage();
+          }
+        });
+      }
 
       const cancelBtn = document.getElementById('job-detail-cancel-btn');
       const reassignBtn = document.getElementById('job-detail-reassign-btn');
