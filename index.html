@@ -711,6 +711,27 @@
     let currentPrice = null;
     let etaOk = false;
 
+    // ---- Pre-dispatch live-tech ETA/routing (2026-09-28) ----
+    // currentDistanceMiles/currentEtaMinutes above are "best known right
+    // now" -- tech-based when a live technician location is usable,
+    // equal to the fixed base numbers below otherwise -- and are what
+    // actually gets written to the jobs row. base*/quoted* below back
+    // that up:
+    //   base{Distance,Eta}{Miles/Minutes,Text} -- the fixed Bayberry-
+    //     origin numbers from calculateEta's radius-eligibility check.
+    //     Immutable once set for a given destination, so they're always
+    //     available to fall back to if live technician data becomes
+    //     unusable between the initial quote and Confirm Dispatch.
+    //   quotedTechnicianId -- the technician id the currently-displayed
+    //     ETA/distance is based on (whether from a live drive-time calc
+    //     or the no-location fallback pick). Compared against a fresh
+    //     pick at Confirm Dispatch time to detect a reassignment.
+    let baseDistanceMiles = null;
+    let baseEtaMinutes = null;
+    let baseEtaText = null;
+    let baseDistanceText = null;
+    let quotedTechnicianId = null;
+
     // ---- Vehicle Information: Year -> Make -> Model, added 2026-09-26 ----
     // Uses the free NHTSA vPIC vehicle API (vpic.nhtsa.dot.gov) instead of
     // maintaining our own make/model list. Optional field -- if NHTSA is
@@ -1138,6 +1159,14 @@
 
         currentDistanceMiles = distanceMiles;
         currentEtaMinutes = Math.round(result.duration.value / 60);
+        // Fixed-base numbers, kept immutable as the fallback target for
+        // the rest of this job's flow (see the variable declarations
+        // above).
+        baseDistanceMiles = currentDistanceMiles;
+        baseEtaMinutes = currentEtaMinutes;
+        baseEtaText = result.duration.text;
+        baseDistanceText = result.distance.text;
+        quotedTechnicianId = null;
         etaOk = true;
 
         etaEl.innerHTML =
@@ -1155,14 +1184,29 @@
       });
     }
 
-    // ---- Realistic tech-availability-based ETA (shown to customer,
-    // before payment) -- added 2026-09-26 ----
-    // Does NOT affect the service-area/radius check above, which always
-    // uses TECH_BASE_LOCATION (Bayberry) as the origin, on purpose --
-    // this only refines what ETA text the customer sees once they're
-    // already confirmed to be in range.
-    async function refineEtaForCustomer(destination) {
-      const etaEl = document.getElementById('eta-result');
+    // ---- Shared on-duty-technician ranking (2026-09-28) ----
+    // Used both for the pre-dispatch ETA shown to the customer AND for
+    // the technician actually assigned at Confirm Dispatch -- one
+    // implementation, so a quote and an assignment can never drift
+    // apart just because two separate copies of "rank by drive time"
+    // happened to disagree. Does NOT touch the fixed Bayberry service-
+    // radius check in calculateEta -- that stays permanently base-
+    // location-based by design (see SERVICE_RADIUS_MILES above); this
+    // only picks which on-duty technician the customer is quoted/
+    // assigned once they're already confirmed to be in range.
+    //
+    // Policy (locked in with Demian 2026-09-22, unchanged):
+    //   1. Not on duty at all -> no technician, dispatch is blocked.
+    //   2. Rank on-duty techs by real driving time to the customer.
+    //   3. Prefer the nearest FREE (not-busy) technician.
+    //   4. Only offer it to a busy technician if every on-duty
+    //      technician is currently busy.
+    //   5. If we don't have enough data to rank by distance (Maps not
+    //      loaded, no on-duty tech has reported GPS yet, or no
+    //      destination yet), fall back to "any free on-duty tech, else
+    //      any on-duty tech" -- still correct, just not distance-
+    //      sorted, and without real ETA numbers attached.
+    async function computeBestTechnicianAndEta(destination) {
       let onDutyTechs = [];
       try {
         const response = await fetch('/api/available-technicians');
@@ -1170,79 +1214,129 @@
         if (!response.ok) throw new Error(result.error || 'Request failed');
         onDutyTechs = result.technicians || [];
       } catch (err) {
-        console.error('Could not refine ETA with technician availability:', err);
-        labelEtaAsEstimated(etaEl, 'technician availability could not be checked');
-        return;
+        console.error('Could not fetch available technicians:', err);
+        return { technician: null, onDutyTechs: [], usedLiveLocation: false };
       }
 
       if (onDutyTechs.length === 0) {
-        labelEtaAsEstimated(etaEl, 'no technician currently on duty');
-        return;
+        return { technician: null, onDutyTechs, usedLiveLocation: false };
       }
+
+      const pickFallback = () => onDutyTechs.find(t => !t.busy) || onDutyTechs[0];
 
       const withLocation = onDutyTechs.filter(
         t => t.current_lat != null && t.current_lng != null
       );
-      if (withLocation.length === 0 || !distanceService) {
-        labelEtaAsEstimated(etaEl, 'technician location not yet available');
-        return;
+
+      if (!distanceService || withLocation.length === 0 || !destination) {
+        return { technician: pickFallback(), onDutyTechs, usedLiveLocation: false };
       }
 
-      distanceService.getDistanceMatrix({
-        origins: withLocation.map(t => ({ lat: t.current_lat, lng: t.current_lng })),
-        destinations: [destination],
-        travelMode: google.maps.TravelMode.DRIVING,
-        unitSystem: google.maps.UnitSystem.IMPERIAL,
-      }, (response, status) => {
-        if (status !== 'OK') {
-          labelEtaAsEstimated(etaEl, "technician drive time couldn't be calculated");
-          return;
-        }
+      return new Promise((resolve) => {
+        distanceService.getDistanceMatrix({
+          origins: withLocation.map(t => ({ lat: t.current_lat, lng: t.current_lng })),
+          destinations: [destination],
+          travelMode: google.maps.TravelMode.DRIVING,
+          unitSystem: google.maps.UnitSystem.IMPERIAL,
+        }, (response, status) => {
+          if (status !== 'OK') {
+            resolve({ technician: pickFallback(), onDutyTechs, usedLiveLocation: false });
+            return;
+          }
 
-        const ranked = withLocation
-          .map((tech, i) => ({ tech, result: response.rows[i].elements[0] }))
-          .filter(r => r.result && r.result.status === 'OK')
-          .sort((a, b) => a.result.duration.value - b.result.duration.value);
+          const ranked = withLocation
+            .map((tech, i) => ({ tech, result: response.rows[i].elements[0] }))
+            .filter(r => r.result && r.result.status === 'OK')
+            .sort((a, b) => a.result.duration.value - b.result.duration.value);
 
-        if (ranked.length === 0) {
-          labelEtaAsEstimated(etaEl, "technician drive time couldn't be calculated");
-          return;
-        }
+          if (ranked.length === 0) {
+            resolve({ technician: pickFallback(), onDutyTechs, usedLiveLocation: false });
+            return;
+          }
 
-        // Same "prefer the nearest free tech" logic as actual dispatch
-        // routing (selectTechnicianForDispatch below) -- kept as its own
-        // separate, simpler copy here on purpose, so this display-only
-        // refinement can never affect (or be affected by) the real
-        // dispatch-time technician selection.
-        const nearestFree = ranked.find(r => !r.tech.busy);
-        const picked = nearestFree || ranked[0];
-        const driveMinutes = Math.round(picked.result.duration.value / 60);
-        const remainingMinutes = picked.tech.remaining_minutes || 0;
-        const BUFFER_MINUTES = 5;
+          const nearestFree = ranked.find(r => !r.tech.busy);
+          const picked = nearestFree || ranked[0];
 
-        // Formula: estimated arrival = remaining time on their current
-        // job (0 if free) + drive time + a 5-minute buffer. Shown as a
-        // range (low = if they were free right now, high = accounting
-        // for finishing up current work first) rather than one number,
-        // since this is genuinely an estimate.
-        const low = driveMinutes + BUFFER_MINUTES;
-        const high = remainingMinutes + driveMinutes + BUFFER_MINUTES;
-        const rangeText = high > low ? `${low}–${high} min` : `${low} min`;
-        const busyNote = remainingMinutes > 0
-          ? ` — they're wrapping up another job first`
-          : '';
-
-        etaEl.innerHTML =
-          `<strong>Estimated arrival: ${rangeText}</strong>${busyNote}<br>` +
-          `${picked.result.distance.text} from your technician`;
+          resolve({
+            technician: picked.tech,
+            onDutyTechs,
+            usedLiveLocation: true,
+            driveMinutes: Math.round(picked.result.duration.value / 60),
+            remainingMinutes: picked.tech.remaining_minutes || 0,
+            distanceMiles: picked.result.distance.value / 1609.34,
+            distanceText: picked.result.distance.text
+          });
+        });
       });
     }
 
+    // Applies a computeBestTechnicianAndEta() result to the on-screen
+    // ETA box, and keeps currentDistanceMiles/currentEtaMinutes (what
+    // actually gets written to the jobs row) equal to whatever's shown.
+    // showNote adds a brief, neutral heads-up line -- used only when
+    // Confirm Dispatch discovers the technician changed since the
+    // original quote (see revalidateAndFinalizeTechnician below); never
+    // shown for the very first quote, since there's nothing to
+    // "update" from yet.
+    function applyTechnicianEtaToDisplay(pickResult, options) {
+      const showNote = !!(options && options.showNote);
+      const etaEl = document.getElementById('eta-result');
+      delete etaEl.dataset.estimatedLabelAdded;
+
+      const noteHtml = showNote
+        ? `<div style="font-size:12px;color:#94a3b8;margin-bottom:4px;">We've updated your technician. Your current estimated arrival time is shown below.</div>`
+        : '';
+
+      if (pickResult.usedLiveLocation) {
+        const BUFFER_MINUTES = 5;
+        const low = pickResult.driveMinutes + BUFFER_MINUTES;
+        const high = pickResult.remainingMinutes + pickResult.driveMinutes + BUFFER_MINUTES;
+        const rangeText = high > low ? `${low}–${high} min` : `${low} min`;
+        const busyNote = pickResult.remainingMinutes > 0
+          ? ` — they're wrapping up another job first`
+          : '';
+
+        etaEl.innerHTML = noteHtml +
+          `<strong>Estimated arrival: ${rangeText}</strong>${busyNote}<br>` +
+          `${pickResult.distanceText} from your technician`;
+        currentDistanceMiles = pickResult.distanceMiles;
+        currentEtaMinutes = pickResult.driveMinutes;
+      } else {
+        // No usable live technician location right now -- fall back to
+        // the fixed base numbers from calculateEta's Bayberry-origin
+        // call, and label them as an estimate, same as before.
+        currentDistanceMiles = baseDistanceMiles;
+        currentEtaMinutes = baseEtaMinutes;
+        if (baseEtaText && baseDistanceText) {
+          etaEl.innerHTML = noteHtml +
+            `<strong>Estimated arrival: ${baseEtaText}</strong><br>${baseDistanceText} away`;
+        }
+        labelEtaAsEstimated(
+          etaEl,
+          pickResult.onDutyTechs.length === 0 ? 'no technician currently on duty' : 'technician location not yet available'
+        );
+      }
+    }
+
+    // ---- Pre-dispatch ETA refinement (shown to customer before
+    // payment) -- added 2026-09-26, rebuilt 2026-09-28 to share ranking
+    // logic with actual dispatch-time selection (see
+    // computeBestTechnicianAndEta above) instead of keeping a separate
+    // copy. Does NOT affect the service-area/radius check in
+    // calculateEta, which always uses TECH_BASE_LOCATION (Bayberry) as
+    // the origin, on purpose -- this only refines what ETA/distance the
+    // customer sees, and which technician the quote is based on, once
+    // they're already confirmed to be in range.
+    async function refineEtaForCustomer(destination) {
+      const pickResult = await computeBestTechnicianAndEta(destination);
+      applyTechnicianEtaToDisplay(pickResult, { showNote: false });
+      quotedTechnicianId = pickResult.technician ? pickResult.technician.id : null;
+    }
+
     // Appends a small "estimated, here's why" note under the ETA box
-    // WITHOUT touching the number already shown (which came from the
-    // real Bayberry-based DistanceMatrix call in calculateEta above) --
-    // used whenever there's no on-duty/located technician to give a
-    // more realistic number instead.
+    // WITHOUT touching the number already shown -- used whenever
+    // there's no on-duty/located technician to give a more realistic
+    // number instead.
     function labelEtaAsEstimated(etaEl, reason) {
       if (etaEl.dataset.estimatedLabelAdded === '1') return;
       etaEl.dataset.estimatedLabelAdded = '1';
@@ -1531,80 +1625,46 @@
       }
     }
 
-    // ---- Dispatch routing (Piece 2: nearest free on-duty technician) ----
-    // Used once, at the moment a new job is submitted, to decide which
-    // on-duty technician gets offered the job first (this only sets the
-    // initial technician_id on the job row / the "no technician
-    // available" gate below -- it doesn't lock the job to that tech; any
-    // on-duty tech can still accept it from their shared job list in
-    // tech.html, same as before). Replaces the old fetchActiveTechnician()
-    // call this function used to make here, which only ever matched
-    // whichever technician had `active = true` (in practice always
-    // Demian) and ignored on_duty status, distance, and whether that tech
-    // was already busy on another job.
+    // ---- Dispatch-time technician revalidation (rebuilt 2026-09-28) ----
+    // Used once, right before Stripe is ever touched in submitDispatch,
+    // to finalize which on-duty technician actually gets the job.
+    // Shares computeBestTechnicianAndEta() with the pre-dispatch quote
+    // above -- same ranking, run fresh -- rather than trusting the
+    // quote-time pick blindly, since time has passed (the customer
+    // filling in name/phone/card) during which a technician's on-duty/
+    // busy state or location could have changed. Replaces the old
+    // selectTechnicianForDispatch(), which re-fetched and re-ranked
+    // independently of the quote.
     //
-    // Policy (locked in with Demian 2026-09-22):
-    //   1. Not on duty at all -> no technician, dispatch is blocked.
-    //   2. Rank on-duty techs by real driving time to the customer.
-    //   3. Prefer the nearest FREE (not-busy) technician.
-    //   4. Only offer it to a busy technician if every on-duty technician
-    //      is currently busy.
-    //   5. If we don't have enough data to rank by distance (Maps not
-    //      loaded, or no on-duty tech has reported a GPS position yet),
-    //      fall back to "any free on-duty tech, else any on-duty tech" --
-    //      still correct, just not distance-sorted.
-    async function selectTechnicianForDispatch() {
-      let onDutyTechs = [];
-      try {
-        const response = await fetch('/api/available-technicians');
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Request failed');
-        onDutyTechs = result.technicians || [];
-      } catch (err) {
-        console.error('Could not fetch available technicians:', err);
+    // Policy (locked in with Demian 2026-09-28):
+    //   1. Not on duty at all -> no technician, dispatch is blocked
+    //      (unchanged from before).
+    //   2. Re-rank on-duty techs by real driving time, same algorithm as
+    //      the original quote.
+    //   3. If the best current pick is the SAME technician the customer
+    //      was quoted, proceed silently -- just keep the displayed
+    //      ETA/distance and the stored currentDistanceMiles/
+    //      currentEtaMinutes matched to the freshest numbers.
+    //   4. If it's a DIFFERENT technician (the quoted one went off duty,
+    //      or is still on duty but got busy while someone else is now
+    //      free and closer), update the on-screen ETA/distance to the
+    //      new technician's real numbers, show a brief neutral note,
+    //      and continue automatically -- no second confirmation click.
+    //      This all happens BEFORE Stripe is ever called (see
+    //      submitDispatch), so the technician/ETA/distance that end up
+    //      on the jobs row are always exactly what was on screen at the
+    //      moment the card was authorized.
+    async function revalidateAndFinalizeTechnician(destination) {
+      const pickResult = await computeBestTechnicianAndEta(destination);
+      if (!pickResult.technician) {
+        quotedTechnicianId = null;
         return null;
       }
 
-      if (onDutyTechs.length === 0) return null;
-
-      const pickFallback = () => onDutyTechs.find(t => !t.busy) || onDutyTechs[0];
-
-      if (onDutyTechs.length === 1) return onDutyTechs[0];
-
-      const withLocation = onDutyTechs.filter(
-        t => t.current_lat != null && t.current_lng != null
-      );
-
-      if (!distanceService || withLocation.length === 0 || !currentDestination) {
-        return pickFallback();
-      }
-
-      return new Promise((resolve) => {
-        distanceService.getDistanceMatrix({
-          origins: withLocation.map(t => ({ lat: t.current_lat, lng: t.current_lng })),
-          destinations: [currentDestination],
-          travelMode: google.maps.TravelMode.DRIVING,
-          unitSystem: google.maps.UnitSystem.IMPERIAL,
-        }, (response, status) => {
-          if (status !== 'OK') {
-            resolve(pickFallback());
-            return;
-          }
-
-          const ranked = withLocation
-            .map((tech, i) => ({ tech, result: response.rows[i].elements[0] }))
-            .filter(r => r.result && r.result.status === 'OK')
-            .sort((a, b) => a.result.duration.value - b.result.duration.value);
-
-          if (ranked.length === 0) {
-            resolve(pickFallback());
-            return;
-          }
-
-          const nearestFree = ranked.find(r => !r.tech.busy);
-          resolve((nearestFree || ranked[0]).tech);
-        });
-      });
+      const changed = quotedTechnicianId != null && pickResult.technician.id !== quotedTechnicianId;
+      applyTechnicianEtaToDisplay(pickResult, { showNote: changed });
+      quotedTechnicianId = pickResult.technician.id;
+      return pickResult.technician;
     }
 
     function updateTrackingDisplay(destination, technician) {
@@ -1849,7 +1909,7 @@
       }
 
       btn.disabled = true;
-      btn.textContent = 'Authorizing card\u2026';
+      btn.textContent = 'Confirming your technician\u2026';
       statusEl.style.display = 'none';
       cardErrorsEl.style.display = 'none';
 
@@ -1869,7 +1929,14 @@
       // distance calculation above and then thrown away.
       const customerAddress = (currentDestination && typeof currentDestination === 'string') ? currentDestination : null;
 
-      const technician = await selectTechnicianForDispatch();
+      // Re-ranks on-duty technicians fresh, right now -- may keep the
+      // quoted technician or reassign to a different one if their
+      // on-duty/busy state or location changed since the quote (see
+      // revalidateAndFinalizeTechnician's own comment). Either way, the
+      // on-screen ETA/distance and currentDistanceMiles/currentEtaMinutes
+      // are already finalized by the time this resolves -- still before
+      // Stripe is ever touched below.
+      const technician = await revalidateAndFinalizeTechnician(currentDestination);
       currentTechnicianId = technician ? technician.id : null;
 
       // Don't take a customer's money (or falsely tell them help is on
@@ -1887,6 +1954,8 @@
           `Please call us directly so we can help another way — your card has not been charged.`;
         return;
       }
+
+      btn.textContent = 'Authorizing card\u2026';
 
       // Amount to place on hold right now. After-hours jobs don't have a
       // final price yet (billed hourly once the job wraps up), so we
@@ -1988,17 +2057,18 @@
         document.getElementById('dispatch-form').style.display = 'none';
 
         // technician is always truthy here -- we already returned early
-        // above if fetchActiveTechnician() came back empty, before ever
-        // authorizing a card.
+        // above if revalidateAndFinalizeTechnician() came back empty,
+        // before ever authorizing a card.
         //
         // 2026-09-28 (available-technicians.js narrowing): `technician`
-        // here came from selectTechnicianForDispatch()'s now-anonymized
-        // roster, so it no longer carries `name`/`location_updated_at`.
-        // Fetch the real, job_id-scoped detail (the jobs row already
-        // has technician_id set from the insert above) so the tracking
-        // screen still shows the tech's actual name immediately,
-        // instead of the generic "Your technician" fallback for the
-        // ~15s until the first poll would otherwise have corrected it.
+        // here came from revalidateAndFinalizeTechnician()'s now-
+        // anonymized roster, so it no longer carries `name`/
+        // `location_updated_at`. Fetch the real, job_id-scoped detail
+        // (the jobs row already has technician_id set from the insert
+        // above) so the tracking screen still shows the tech's actual
+        // name immediately, instead of the generic "Your technician"
+        // fallback for the ~15s until the first poll would otherwise
+        // have corrected it.
         const trackedTechnician = await fetchAssignedTechnician();
         startTracking(currentDestination, trackedTechnician || { name: null, current_lat: null, current_lng: null });
         saveActiveJob();
@@ -2047,6 +2117,11 @@
       currentEtaMinutes = null;
       currentPrice = null;
       etaOk = false;
+      baseDistanceMiles = null;
+      baseEtaMinutes = null;
+      baseEtaText = null;
+      baseDistanceText = null;
+      quotedTechnicianId = null;
       clearSavedJob();
       showScreen('services');
     }
