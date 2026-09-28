@@ -1494,6 +1494,15 @@
           technicianId: currentTechnicianId,
           destination: currentDestination,
           jobToken: currentJobToken,
+          // 2026-09-28: customerName/customerPhone added so the
+          // completed-job screen's headlight-restoration CTA still works
+          // after a reload -- without these, a customer who reloaded
+          // right after completion (a real, tested path, since the
+          // completed screen is designed to survive a reload) would hit
+          // the leads table's `not null` constraint on name/phone with
+          // no way to recover short of re-dispatching.
+          customerName: currentCustomerName,
+          customerPhone: currentCustomerPhone,
         }));
       } catch (err) {
         // Private-browsing mode, storage disabled, quota, etc. -- not
@@ -1526,6 +1535,8 @@
       currentTechnicianId = saved.technicianId;
       currentDestination = saved.destination;
       currentJobToken = saved.jobToken || null;
+      currentCustomerName = saved.customerName || null;
+      currentCustomerPhone = saved.customerPhone || null;
 
       const status = await fetchJobStatus(currentJobId);
 
