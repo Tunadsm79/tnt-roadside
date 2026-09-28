@@ -75,10 +75,40 @@ async function supabaseGet(path) {
 // implicitly (a tech who logged off simply wasn't in the array).
 async function getAssignedTechnicianForJob(jobId, res) {
   const jobs = await supabaseGet(
-    `/jobs?id=eq.${jobId}&select=technician_id,status`
+    `/jobs?id=eq.${jobId}&select=technician_id,status,service_type,price,completed_at`
   );
   const job = jobs && jobs[0];
-  if (!job || !job.technician_id || job.status === 'completed' || job.status === 'cancelled') {
+
+  if (!job || job.status === 'cancelled') {
+    res.status(200).json({ technician: null });
+    return;
+  }
+
+  // 2026-09-28 addition: the customer's tracking poll (index.html)
+  // needs to tell "genuinely completed" apart from "cancelled/vanished"
+  // -- both currently fall out of active_jobs_view the same way, which
+  // is what made the completed-job screen indistinguishable from a
+  // silent reset. jobs.price already holds the ACTUAL captured amount
+  // by the time status flips to 'completed' -- complete-job.js
+  // overwrites it with the Stripe-reported amount_received for
+  // after-hours jobs (whose final charge can differ from the original
+  // authorization ceiling), and it was already correct for flat-rate
+  // jobs. No schema change needed, just surfacing what's already
+  // there. Left unauthenticated/job_id-scoped like the rest of this
+  // mode -- same posture, see header comment.
+  if (job.status === 'completed') {
+    res.status(200).json({
+      technician: null,
+      completedJob: {
+        service_type: job.service_type,
+        price: job.price,
+        completed_at: job.completed_at
+      }
+    });
+    return;
+  }
+
+  if (!job.technician_id) {
     res.status(200).json({ technician: null });
     return;
   }

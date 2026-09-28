@@ -35,6 +35,27 @@
 // resets status back to 'dispatched' even if the job was further along
 // (en_route/arrived) -- the newly-assigned tech hasn't actually done any
 // of that yet, so it would be a lie to leave the old status standing.
+//
+// 2026-09-28: the "shared pool" comment above is now WRONG and this
+// closes the gap it described. As of the live-tech-ETA work, a job's
+// technician_id is decided and stored at DISPATCH time (before any tech
+// ever sees the job), specifically so the quoted ETA/distance and
+// admin's per-tech performance tracking stay honest about who a job
+// was actually quoted against. A normal (non-admin_reassign) accept now
+// only succeeds for the technician the job is already assigned to --
+// see the technician_id check below. admin_reassign is UNCHANGED and
+// remains the one legitimate way to hand a job to a different tech
+// (phone dies, tech goes off duty mid-shift, etc.) -- it still works
+// from any non-terminal status and still resets to 'dispatched'.
+//
+// Also as of 2026-09-28: for a tech caller, `tech_name` is now taken
+// from their own verified login token (auth.tech_name), never trusted
+// from the request body. Previously any valid tech token could pass
+// ANY tech_name in the body and accept (or get credited for) a job as
+// a DIFFERENT technician -- not just the specific bug this fix was
+// written for, but the same underlying "client says who I am" mistake.
+// admin_reassign still reads tech_name from the body, since admin's own
+// job here is picking which tech to hand the job to.
 const { notifyStatusChange } = require('./_notify');
 const { requireRole, ALLOWED_ORIGIN } = require('./_auth');
 
@@ -89,17 +110,23 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const { job_id, tech_name, admin_reassign } = req.body || {};
+    const { job_id, admin_reassign } = req.body || {};
     if (!job_id) {
       res.status(400).json({ error: 'Missing job_id' });
       return;
     }
+
+    // admin_reassign: admin explicitly names the target tech in the
+    // body (that's the whole point of the action). A normal accept:
+    // always the caller's OWN verified identity from their token, never
+    // client-supplied -- see the 2026-09-28 header comment above.
+    const tech_name = admin_reassign ? (req.body || {}).tech_name : auth.tech_name;
     if (!tech_name) {
       res.status(400).json({ error: 'Missing tech_name' });
       return;
     }
 
-    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status,service_type,customers(name,phone)`);
+    const jobs = await supabaseRequest(`/jobs?id=eq.${job_id}&select=id,status,technician_id,service_type,customers(name,phone)`);
     const job = jobs && jobs[0];
     if (!job) {
       res.status(404).json({ error: 'Job not found' });
@@ -119,6 +146,19 @@ module.exports = async (req, res) => {
     const tech = techs && techs[0];
     if (!tech) {
       res.status(400).json({ error: `No technician named "${tech_name}" found` });
+      return;
+    }
+
+    // The actual queue-integrity check: a normal accept only succeeds
+    // for the technician this job is already assigned to. `technician_id`
+    // being null is a defensive fallback (shouldn't occur under the
+    // current dispatch flow, which never creates a job without a
+    // technician) -- treated as "anyone on duty may accept," same as
+    // the old shared-pool behavior, rather than a job nobody can ever
+    // take. admin_reassign is exempt by design -- it's the intended
+    // override path.
+    if (!admin_reassign && job.technician_id && job.technician_id !== tech.id) {
+      res.status(403).json({ error: 'This job is already assigned to a different technician.' });
       return;
     }
 

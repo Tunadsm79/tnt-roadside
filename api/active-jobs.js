@@ -1,5 +1,5 @@
-// Returns every open job (status 'requested', 'dispatched', 'en_route',
-// or 'arrived' -- i.e. anything not yet completed/cancelled) for
+// Returns open jobs (status 'requested', 'dispatched', 'en_route', or
+// 'arrived' -- i.e. anything not yet completed/cancelled) for
 // tech.html's job list/detail view -- including the customer's name and
 // phone number, joined server-side with the service-role key. This
 // replaces tech.html's previous direct anon-key read of
@@ -12,6 +12,22 @@
 // which is the one hard line the rest of this app's security has been
 // built around (see project docs, RLS + GRANT section). Worth a proper
 // auth pass later if this app grows past one technician.
+//
+// 2026-09-28: a technician's own request is now scoped server-side to
+// THEIR OWN assigned jobs (technician_id matches, or is null -- a
+// defensive fallback for any orphaned job with no assignment, which
+// shouldn't occur under the current dispatch flow but keeps the old
+// "anyone can pick it up" behavior for that edge case rather than
+// hiding the job from every tech). A job is now decided (and stored)
+// at dispatch time, before any tech ever sees it -- see accept-job.js's
+// same-day comment -- so the old shared-pool model, where this endpoint
+// handed every open job to every on-duty tech, is gone. requireRole()
+// already decodes which tech is calling (claims.tech_name, from their
+// login token -- see _auth.js), so this is enforced here, server-side,
+// not just hidden client-side: a different tech's browser never
+// receives another tech's job data at all. Admin's own calls (role
+// 'admin') are NOT scoped -- admin sees every job, same as always,
+// since admin.html is where reassignment/oversight happens.
 const { requireRole, ALLOWED_ORIGIN } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
@@ -44,9 +60,32 @@ module.exports = async (req, res) => {
       return;
     }
 
+    // For a tech (not admin), look up their own technician id so the
+    // jobs query below can be scoped to it. Same name->id lookup
+    // accept-job.js already does.
+    let techScopeFilter = '';
+    if (auth.role === 'tech') {
+      const techLookup = await fetch(
+        `${SUPABASE_URL}/rest/v1/technicians?name=eq.${encodeURIComponent(auth.tech_name)}&select=id`,
+        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
+      );
+      const techLookupText = await techLookup.text();
+      const techRows = techLookupText ? JSON.parse(techLookupText) : [];
+      const myTech = techRows && techRows[0];
+      if (!myTech) {
+        // Token names a technician that no longer exists in the table --
+        // fail closed (empty list) rather than silently showing every
+        // job, same "fail closed" spirit as requireRole() itself.
+        res.status(200).json({ jobs: [] });
+        return;
+      }
+      techScopeFilter = `&or=(technician_id.eq.${myTech.id},technician_id.is.null)`;
+    }
+
     const url = `${SUPABASE_URL}/rest/v1/jobs` +
       `?status=in.(requested,dispatched,en_route,arrived)` +
-      `&select=id,service_type,price,status,payment_status,created_at,customer_lat,customer_lng,customer_address,vehicle_year,vehicle_make,vehicle_model,customers(name,phone)` +
+      techScopeFilter +
+      `&select=id,service_type,price,status,payment_status,created_at,customer_lat,customer_lng,customer_address,vehicle_year,vehicle_make,vehicle_model,technician_id,customers(name,phone)` +
       `&order=created_at.asc`;
 
     const response = await fetch(url, {

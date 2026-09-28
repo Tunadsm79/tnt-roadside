@@ -605,6 +605,34 @@
     </div>
   </main>
 
+  <!-- Completed-job / receipt screen -- added 2026-09-28. Replaces the old
+       behavior where a completed job silently reset the customer straight
+       back to the services screen with no confirmation at all. Reuses the
+       tracking screen's card/eta-box/chat-box styling so it doesn't need
+       any new CSS. The screen stays up until the customer taps "Back to
+       Services" -- nothing here auto-advances or resets on its own. -->
+  <main class="screen" id="screen-completed">
+    <div class="card">
+      <h2>You're all set!</h2>
+      <p style="margin-top:-8px; color:#94a3b8;">Your T&amp;T roadside service is complete.</p>
+
+      <div class="eta-box" id="completed-summary" style="display:block;"></div>
+
+      <div class="chat-box" style="margin-top:20px;">
+        <div class="chat-header">Cloudy or yellow headlights?</div>
+        <p style="padding:12px 16px 0; font-size:14px; color:#cbd5e1;">
+          Restore their appearance and improve nighttime visibility with T&amp;T Headlight Restoration.
+        </p>
+        <div style="padding:12px 16px 16px;">
+          <button class="btn" id="headlight-cta-btn">Get Headlight Restoration</button>
+          <p id="headlight-cta-status" style="display:none; margin-top:10px; font-size:14px;"></p>
+        </div>
+      </div>
+
+      <button class="btn secondary" id="completed-back-btn" style="margin-top: 20px;">Back to Services</button>
+    </div>
+  </main>
+
   <footer>
     &copy; 2026 T&amp;T Roadside. Available 7 days a week.
   </footer>
@@ -945,6 +973,16 @@
       spareCheck: document.getElementById('screen-spare-check'),
       confirm: document.getElementById('screen-confirm'),
       tracking: document.getElementById('screen-tracking'),
+      completed: document.getElementById('screen-completed'),
+    };
+
+    // Human-readable labels for the completed-job screen, matching the
+    // data-label values already on the service-selection buttons above.
+    const SERVICE_LABELS = {
+      flat_tire: 'Flat Tire',
+      dead_battery: 'Dead Battery',
+      lockout: 'Locked Out',
+      fuel_delivery: 'Fuel Delivery',
     };
 
     function showScreen(name) {
@@ -1427,6 +1465,17 @@
     // the security plan doc's "WHAT CAN STAY THE SAME" section).
     let currentJobToken = null;
 
+    // Saved at dispatch time (submitDispatch) so the completed-job
+    // screen's headlight-restoration CTA can submit a lead without
+    // making the customer re-type their name/phone -- see the
+    // 2026-09-28 completed-job-screen work.
+    let currentCustomerName = null;
+    let currentCustomerPhone = null;
+    // Belt-and-suspenders against a double-tap submitting the lead
+    // twice, alongside the button's own disabled state and the leads
+    // table's unique(job_id, interest) constraint.
+    let headlightLeadSubmitted = false;
+
     // ---- Resume-active-job-on-reload (added 2026-09-26) ----
     // Everything above (currentJobId/currentTechnicianId/currentDestination)
     // was plain in-memory JS state -- gone the instant the page reloaded,
@@ -1481,9 +1530,19 @@
       const status = await fetchJobStatus(currentJobId);
 
       if (status === null) {
-        // Job fell out of active_jobs_view -- it's completed or
-        // cancelled server-side. Nothing to resume; clear it so this
-        // check is a no-op on every future load.
+        // Job fell out of active_jobs_view -- either it completed or it
+        // was cancelled. 2026-09-28: check which one, so a customer who
+        // reloads the page right after their job finished still sees the
+        // completed-job screen instead of silence. currentJobId is kept
+        // (not cleared) here on purpose -- showCompletedScreen and the
+        // headlight CTA both need it, and only "Back to Services" clears
+        // the saved job from here on.
+        const completedJob = await fetchJobCompletionInfo(currentJobId);
+        if (completedJob) {
+          showCompletedScreen(completedJob);
+          return;
+        }
+        // Actually cancelled, not completed -- nothing to resume.
         currentJobId = null;
         currentTechnicianId = null;
         currentDestination = null;
@@ -1625,6 +1684,57 @@
       }
     }
 
+    // ---- Completed-job screen (added 2026-09-28) ----
+    // fetchJobStatus() returns null once a job falls out of
+    // active_jobs_view -- which happens for BOTH completed and cancelled
+    // jobs, with no way to tell them apart from that call alone. This
+    // separate lookup asks available-technicians.js's job_id-scoped mode
+    // (extended the same day to add a `completedJob` block, see that
+    // file's comment) which of the two actually happened, so a genuinely
+    // finished job gets the receipt screen instead of getting lumped in
+    // with "cancelled" and silently reset.
+    async function fetchJobCompletionInfo(jobId) {
+      if (!jobId) return null;
+      try {
+        const response = await fetch('/api/available-technicians?job_id=' + encodeURIComponent(jobId));
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Request failed');
+        return result.completedJob || null;
+      } catch (err) {
+        console.error('Could not fetch job completion info:', err);
+        return null;
+      }
+    }
+
+    // Shows the completed-job screen and fills in the real service/price
+    // for this job. Deliberately does NOT call clearSavedJob() or
+    // resetToServices() -- per Demian, this screen has to stay up (even
+    // across a reload) until the customer deliberately taps "Back to
+    // Services". Only that button's own handler tears the saved job down.
+    function showCompletedScreen(completedJob) {
+      stopTracking();
+      currentJobStatus = 'completed';
+      headlightLeadSubmitted = false;
+
+      const label = SERVICE_LABELS[completedJob.service_type] || completedJob.service_type || 'roadside service';
+      const priceText = (completedJob.price != null)
+        ? `$${Number(completedJob.price).toFixed(2)}`
+        : 'the amount charged to your card';
+      document.getElementById('completed-summary').innerHTML =
+        `<strong>${label}</strong> &mdash; ${priceText} charged.<br>` +
+        `Your payment is complete. Thank you for choosing T&amp;T Roadside!`;
+
+      const ctaBtn = document.getElementById('headlight-cta-btn');
+      ctaBtn.disabled = false;
+      ctaBtn.style.display = 'inline-block';
+      ctaBtn.textContent = 'Get Headlight Restoration';
+      const ctaStatus = document.getElementById('headlight-cta-status');
+      ctaStatus.style.display = 'none';
+      ctaStatus.style.color = '';
+
+      showScreen('completed');
+    }
+
     // ---- Dispatch-time technician revalidation (rebuilt 2026-09-28) ----
     // Used once, right before Stripe is ever touched in submitDispatch,
     // to finalize which on-duty technician actually gets the job.
@@ -1738,11 +1848,16 @@
           const status = await fetchJobStatus(currentJobId);
           if (status === null) {
             // Job wrapped up (completed/cancelled) server-side while this
-            // customer was watching the tracking screen. Stop polling,
-            // stop treating it as the "active job" for resume-on-reload,
-            // and take them back to the start screen rather than leaving
-            // them staring at a job that no longer exists.
+            // customer was watching the tracking screen. 2026-09-28:
+            // find out which one -- a completed job gets the receipt
+            // screen (and stays there until "Back to Services"), not the
+            // silent reset a cancelled job still gets.
             stopTracking();
+            const completedJob = await fetchJobCompletionInfo(currentJobId);
+            if (completedJob) {
+              showCompletedScreen(completedJob);
+              return;
+            }
             clearSavedJob();
             resetToServices();
             return;
@@ -1907,6 +2022,12 @@
         alert('Please enter your name and phone number so a tech can reach you.');
         return;
       }
+
+      // Saved for the completed-job screen's headlight-restoration CTA,
+      // so that lead capture doesn't need the customer to type their
+      // name/phone a second time.
+      currentCustomerName = name;
+      currentCustomerPhone = phone;
 
       btn.disabled = true;
       btn.textContent = 'Confirming your technician\u2026';
@@ -2132,6 +2253,67 @@
     document.getElementById('tracking-start-over-btn').addEventListener('click', () => {
       stopTracking();
       resetToServices();
+    });
+
+    document.getElementById('completed-back-btn').addEventListener('click', () => {
+      resetToServices();
+    });
+
+    // ---- Headlight-restoration lead capture (added 2026-09-28) ----
+    // One-tap interest capture, per Demian: no new form, reuses the name/
+    // phone already collected at dispatch (currentCustomerName/Phone).
+    // Inserts straight into the `leads` table via the anon Supabase key,
+    // the same pattern already used for customers/jobs/payments (RLS
+    // policy allows anon INSERT only, no SELECT) -- no new serverless
+    // function needed, which also matters since this project is already
+    // at Vercel Hobby's 12-function cap. See claude/... SQL handoff for
+    // the table + policy Demian needs to run in Supabase before this can
+    // actually succeed.
+    document.getElementById('headlight-cta-btn').addEventListener('click', async () => {
+      if (headlightLeadSubmitted) return;
+      headlightLeadSubmitted = true; // flips before the await, so a fast double-tap can't both get through before the button's disabled state lands
+
+      const btn = document.getElementById('headlight-cta-btn');
+      const statusEl = document.getElementById('headlight-cta-status');
+      btn.disabled = true;
+      btn.textContent = 'Submitting…';
+
+      try {
+        const { error } = await supabaseClient.from('leads').insert({
+          job_id: currentJobId,
+          name: currentCustomerName,
+          phone: currentCustomerPhone,
+          interest: 'headlight_restoration',
+        });
+        if (error) throw error;
+
+        btn.style.display = 'none';
+        statusEl.style.color = '#4ade80';
+        statusEl.textContent = "Thanks! We'll contact you about T&T Headlight Restoration.";
+        statusEl.style.display = 'block';
+      } catch (err) {
+        console.error('Could not submit headlight interest:', err);
+        // Postgres unique_violation -- the leads table's
+        // unique(job_id, interest) constraint caught a duplicate that
+        // raced past the disabled-button check (e.g. two rapid taps
+        // before the first request's response came back). The lead is
+        // on file either way, so treat it as success from the
+        // customer's point of view rather than showing an error for
+        // something that isn't actually wrong.
+        if (err && err.code === '23505') {
+          btn.style.display = 'none';
+          statusEl.style.color = '#4ade80';
+          statusEl.textContent = "Thanks! We'll contact you about T&T Headlight Restoration.";
+          statusEl.style.display = 'block';
+          return;
+        }
+        headlightLeadSubmitted = false;
+        btn.disabled = false;
+        btn.textContent = 'Get Headlight Restoration';
+        statusEl.style.color = '#f87171';
+        statusEl.textContent = 'Could not submit right now — please try again.';
+        statusEl.style.display = 'block';
+      }
     });
 
     // ---- "Tech on duty" indicator (added 2026-09-26) ----
