@@ -1,20 +1,34 @@
-// Returns every ON-DUTY technician (id, name, live position, whether
-// they're already on a job, and now -- as of the 2026-09-26 ETA-realism
-// pass -- how many minutes of work they likely have left on their
-// current job(s)) for index.html's dispatch routing logic and, now, its
-// pre-payment ETA estimate too.
+// Two modes, selected by whether a `job_id` query param is present.
+// Both are still fully unauthenticated -- this endpoint is called by
+// index.html, i.e. customers who are never logged in, by design.
 //
-// This replaces the old technician_locations view + `active = true`
-// lookup that index.html used to use for this decision: `active` isn't
-// tied to whether a tech is actually working right now (that's `on_duty`,
-// set by tech-heartbeat.js at login/logout), and the old query had no
-// distance or busy-status logic at all -- it just grabbed one row with
-// .limit(1) and no ordering, which in practice always came back as the
-// same technician (Demian) no matter who was actually on shift. See the
-// project doc's "Dispatch routing fix" section for the full story.
+// Step 9 continuation (2026-09-28) / "Step 10" of the security plan:
+// this replaces the single "return every on-duty tech's full identity
+// and live GPS to anyone" shape that Steps 4-8 flagged as unfixable by
+// a simple requireRole() swap. The fix isn't auth -- it's narrowing
+// each mode to only what its caller actually needs, per the
+// call-by-call trace done in Step 8 (see the project doc's
+// "available-technicians.js: does the customer browser actually need
+// raw technician identity and live GPS?" section):
 //
-// Same service-role-key pattern as tech-status.js -- keeps `technicians`
-// off the public anon key's read surface.
+//   - No job_id (dispatch ranking / pre-payment ETA / homepage duty
+//     count) -- these three uses never read a technician's name, only
+//     coordinates, busy status, and id. So this mode now omits `name`
+//     and `location_updated_at` entirely.
+//   - `?job_id=<uuid>` (a customer already mid-job, tracking the one
+//     technician assigned to THEIR job) -- this is the only case that
+//     legitimately needs a name. Scoped server-side to that one job's
+//     assigned technician, not the whole on-duty roster. Same severity
+//     as the existing unauthenticated `active_jobs_view` status poll
+//     the security plan already accepted as fine as-is: you have to
+//     already possess the job's UUID, and this returns detail about
+//     that one job only, not a bulk read of everyone.
+//
+// No requireRole() here, and none is planned -- unlike every other
+// endpoint touched in Steps 5-9, this one has a real customer-facing
+// caller (index.html) that will never carry a token. logTokenCheck is
+// kept purely for observability (was it ever called with staff traffic
+// by mistake), not because enforcement is coming.
 const { logTokenCheck } = require('./_auth');
 
 const SUPABASE_URL = 'https://psqzoyjszykdgjkcbrrt.supabase.co';
@@ -40,6 +54,86 @@ const DEFAULT_SERVICE_MINUTES = {
 };
 const FALLBACK_SERVICE_MINUTES = 15; // any future/unrecognized service_type
 
+async function supabaseGet(path) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` }
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(`Supabase ${path} failed: ${response.status} ${text}`);
+  }
+  return data;
+}
+
+// job_id-scoped mode: who is assigned to THIS job, if anyone currently
+// on duty. Mirrors the same "leave the display as-is, don't error" shape
+// index.html's fetchAssignedTechnician() already expects -- not found,
+// no technician assigned yet, job already over, or that technician isn't
+// on duty right now all come back as `{ technician: null }`, 200, not an
+// error. Same on_duty requirement the old single-list shape enforced
+// implicitly (a tech who logged off simply wasn't in the array).
+async function getAssignedTechnicianForJob(jobId, res) {
+  const jobs = await supabaseGet(
+    `/jobs?id=eq.${jobId}&select=technician_id,status`
+  );
+  const job = jobs && jobs[0];
+  if (!job || !job.technician_id || job.status === 'completed' || job.status === 'cancelled') {
+    res.status(200).json({ technician: null });
+    return;
+  }
+
+  const techs = await supabaseGet(
+    `/technicians?id=eq.${job.technician_id}&on_duty=eq.true&select=id,name,current_lat,current_lng,location_updated_at`
+  );
+  const tech = techs && techs[0];
+  res.status(200).json({ technician: tech || null });
+}
+
+// No-job_id mode: the full on-duty roster, anonymized -- coordinates,
+// busy status, and id only. This is the shape refineEtaForCustomer(),
+// selectTechnicianForDispatch(), and refreshDutyIndicator() in
+// index.html actually consume; none of the three ever reads `name` or
+// `location_updated_at`, confirmed against the live code in Step 8.
+async function getAnonymizedRoster(res) {
+  const [technicians, busyJobs] = await Promise.all([
+    supabaseGet(`/technicians?select=id,current_lat,current_lng&on_duty=eq.true`),
+    // "Busy" = has a job that's been assigned and isn't finished yet.
+    // Deliberately excludes 'requested' jobs -- those haven't been
+    // accepted by anyone, so they shouldn't count against whichever
+    // technician they happened to be suggested to at creation.
+    supabaseGet(
+      `/jobs?select=technician_id,service_type&status=in.(dispatched,en_route,arrived)&technician_id=not.is.null`
+    )
+  ]);
+
+  // Sum default duration across every non-terminal job a technician
+  // currently has (a tech can legitimately have more than one queued
+  // up -- stacking is allowed, see the project doc's dispatch-routing
+  // decision) rather than just counting one.
+  const remainingMinutesByTech = new Map();
+  for (const job of busyJobs) {
+    const minutes = DEFAULT_SERVICE_MINUTES[job.service_type] ?? FALLBACK_SERVICE_MINUTES;
+    remainingMinutesByTech.set(
+      job.technician_id,
+      (remainingMinutesByTech.get(job.technician_id) || 0) + minutes
+    );
+  }
+
+  const result = technicians.map(t => {
+    const remaining_minutes = remainingMinutesByTech.get(t.id) || 0;
+    return {
+      id: t.id,
+      current_lat: t.current_lat,
+      current_lng: t.current_lng,
+      busy: remaining_minutes > 0,
+      remaining_minutes
+    };
+  });
+
+  res.status(200).json({ technicians: result });
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -54,12 +148,6 @@ module.exports = async (req, res) => {
     return;
   }
 
-  // Step 4 of the security plan: log-only, never changes the response.
-  // Flagged in the plan doc: this endpoint is also called by index.html
-  // (unauthenticated customers, for dispatch routing) -- so unlike the
-  // other bulk-data endpoints, it can't simply require a tech/admin
-  // token later without breaking customer dispatch. Logging here now so
-  // that's visible before step 7 has to make a real decision about it.
   logTokenCheck('available-technicians', req);
 
   try {
@@ -68,63 +156,12 @@ module.exports = async (req, res) => {
       return;
     }
 
-    const [techResponse, jobsResponse] = await Promise.all([
-      fetch(
-        `${SUPABASE_URL}/rest/v1/technicians?select=id,name,current_lat,current_lng,location_updated_at&on_duty=eq.true`,
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
-      ),
-      // "Busy" = has a job that's been assigned and isn't finished yet.
-      // Deliberately excludes 'requested' jobs -- those haven't been
-      // accepted by anyone, so they shouldn't count against whichever
-      // technician they happened to be suggested to at creation.
-      // `service_type` added (2026-09-26) so remaining-time-on-current-
-      // job can be estimated per the default-duration table above --
-      // previously this query only selected technician_id.
-      fetch(
-        `${SUPABASE_URL}/rest/v1/jobs?select=technician_id,service_type&status=in.(dispatched,en_route,arrived)&technician_id=not.is.null`,
-        { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } }
-      )
-    ]);
-
-    const techText = await techResponse.text();
-    const technicians = techText ? JSON.parse(techText) : [];
-    if (!techResponse.ok) {
-      throw new Error(`Supabase technicians fetch failed: ${techResponse.status} ${techText}`);
+    const jobId = req.query && req.query.job_id;
+    if (jobId) {
+      await getAssignedTechnicianForJob(jobId, res);
+    } else {
+      await getAnonymizedRoster(res);
     }
-
-    const jobsText = await jobsResponse.text();
-    const busyJobs = jobsText ? JSON.parse(jobsText) : [];
-    if (!jobsResponse.ok) {
-      throw new Error(`Supabase jobs fetch failed: ${jobsResponse.status} ${jobsText}`);
-    }
-
-    // Sum default duration across every non-terminal job a technician
-    // currently has (a tech can legitimately have more than one queued
-    // up -- stacking is allowed, see the project doc's dispatch-routing
-    // decision) rather than just counting one.
-    const remainingMinutesByTech = new Map();
-    for (const job of busyJobs) {
-      const minutes = DEFAULT_SERVICE_MINUTES[job.service_type] ?? FALLBACK_SERVICE_MINUTES;
-      remainingMinutesByTech.set(
-        job.technician_id,
-        (remainingMinutesByTech.get(job.technician_id) || 0) + minutes
-      );
-    }
-
-    const result = technicians.map(t => {
-      const remaining_minutes = remainingMinutesByTech.get(t.id) || 0;
-      return {
-        id: t.id,
-        name: t.name,
-        current_lat: t.current_lat,
-        current_lng: t.current_lng,
-        location_updated_at: t.location_updated_at,
-        busy: remaining_minutes > 0,
-        remaining_minutes
-      };
-    });
-
-    res.status(200).json({ technicians: result });
   } catch (err) {
     console.error('available-technicians error:', err);
     res.status(500).json({ error: 'Could not load available technicians' });

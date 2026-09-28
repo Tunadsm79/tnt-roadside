@@ -1498,14 +1498,21 @@
     // rare), they won't be found here and this poll cycle simply skips
     // updating (same graceful "leave the last known display as-is"
     // behavior this code already had) rather than erroring.
+    //
+    // 2026-09-28 (available-technicians.js narrowing, Step 9
+    // continuation of the security plan): switched from fetching the
+    // WHOLE on-duty roster and finding this job's tech client-side, to a
+    // job_id-scoped request that only ever returns the one technician
+    // assigned to THIS job. Same graceful null-handling as before --
+    // just no longer downloads every other on-duty tech's name and live
+    // GPS just to find one of them.
     async function fetchAssignedTechnician() {
-      if (!currentTechnicianId) return null;
+      if (!currentJobId) return null;
       try {
-        const response = await fetch('/api/available-technicians');
+        const response = await fetch('/api/available-technicians?job_id=' + encodeURIComponent(currentJobId));
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Request failed');
-        const techs = result.technicians || [];
-        return techs.find(t => t.id === currentTechnicianId) || null;
+        return result.technician || null;
       } catch (err) {
         console.error('Could not fetch technician location:', err);
         return null;
@@ -1961,7 +1968,17 @@
         // technician is always truthy here -- we already returned early
         // above if fetchActiveTechnician() came back empty, before ever
         // authorizing a card.
-        startTracking(currentDestination, technician);
+        //
+        // 2026-09-28 (available-technicians.js narrowing): `technician`
+        // here came from selectTechnicianForDispatch()'s now-anonymized
+        // roster, so it no longer carries `name`/`location_updated_at`.
+        // Fetch the real, job_id-scoped detail (the jobs row already
+        // has technician_id set from the insert above) so the tracking
+        // screen still shows the tech's actual name immediately,
+        // instead of the generic "Your technician" fallback for the
+        // ~15s until the first poll would otherwise have corrected it.
+        const trackedTechnician = await fetchAssignedTechnician();
+        startTracking(currentDestination, trackedTechnician || { name: null, current_lat: null, current_lng: null });
         saveActiveJob();
       } catch (err) {
         console.error('Dispatch failed:', err);
