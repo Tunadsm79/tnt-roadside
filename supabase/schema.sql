@@ -153,3 +153,43 @@ alter table messages enable row level security;
 -- No policies created for anon on purpose -- see comment above. RLS is ON
 -- with zero policies, which means the anon key is flatly denied on this
 -- table; only the service-role key (used server-side only) can touch it.
+
+-- 2026-09-28: headlight-restoration lead capture (completed-job screen's
+-- "Get Headlight Restoration" CTA, index.html). Run once, by hand, in the
+-- Supabase SQL Editor (Claude doesn't execute schema-modifying SQL
+-- directly, per this project's standing rule).
+--
+-- Same anon-insert-only RLS pattern as customers/jobs/payments -- no
+-- select policy, so a lead can be created but never read back through the
+-- public anon key.
+--
+-- unique(job_id, interest) is the real duplicate-prevention backstop (a
+-- disabled button is just UI): index.html's insert code treats hitting
+-- this constraint (Postgres error 23505) as success, since the lead really
+-- is on file either way, rather than showing the customer an error.
+--
+-- IMPORTANT LESSON from live-testing this table on 2026-09-28: unlike
+-- customers/jobs/payments (which already had an anon INSERT grant on the
+-- underlying table from earlier in this project, on top of their RLS
+-- policy -- see the "anon already has a blanket INSERT ... GRANT on jobs"
+-- note above), a brand-new table does NOT get that grant automatically.
+-- The RLS policy alone was not enough -- every insert failed with
+-- "permission denied for table leads" (Postgres code 42501) until the
+-- GRANT below was run too. Any future anon-writable table needs both
+-- statements, not just the policy.
+create table leads (
+  id uuid primary key default gen_random_uuid(),
+  job_id uuid references jobs(id),
+  name text not null,
+  phone text not null,
+  interest text not null default 'headlight_restoration',
+  created_at timestamptz default now(),
+  unique (job_id, interest)
+);
+
+alter table leads enable row level security;
+
+create policy "anon can insert leads" on leads
+  for insert to anon with check (true);
+
+grant insert on public.leads to anon;
