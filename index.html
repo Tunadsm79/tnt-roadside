@@ -1945,7 +1945,21 @@
     }
 
     function startTracking(destination, technician) {
-      currentJobStatus = 'requested'; // always true the instant a dispatch succeeds
+      // 2026-09-29 fix (customer cancellation testing): this used to
+      // unconditionally reset currentJobStatus to 'requested' here,
+      // which is only true for the fresh-dispatch caller below. The
+      // OTHER caller, resumeActiveJobIfAny(), sets currentJobStatus to
+      // the real fetched status immediately before calling this -- and
+      // this line was clobbering that back to 'requested' every time,
+      // so a customer reloading (or opening a second tab) on an
+      // 'arrived' job would see the Cancel Service button reappear for
+      // up to one TRACKING_POLL_MS interval, until the first poll tick
+      // corrected it. cancel-job.js's server-side arrived guard always
+      // caught the resulting cancel attempt (409), so this was never a
+      // way to actually bypass the restriction -- but it's exactly the
+      // "stale page showing Cancel after arrived" scenario customer
+      // cancellation needed to avoid, so the reset now lives only at
+      // the fresh-dispatch call site where it's actually true.
       showScreen('tracking');
       updateTrackingDisplay(destination, technician);
       resetChatState();
@@ -2308,6 +2322,7 @@
         // fallback for the ~15s until the first poll would otherwise
         // have corrected it.
         const trackedTechnician = await fetchAssignedTechnician();
+        currentJobStatus = 'requested'; // always true the instant a dispatch succeeds
         startTracking(currentDestination, trackedTechnician || { name: null, current_lat: null, current_lng: null });
         saveActiveJob();
       } catch (err) {
